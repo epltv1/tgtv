@@ -31,12 +31,22 @@ class Stream:
     async def start(self):
         cmd = [
             "ffmpeg", "-y",
+            # === SYNC FIXES ===
+            "-itsoffset", "0.0",           # Align audio/video
+            "-async", "1",                 # Sync audio to video
+            "-copyts",                     # Preserve timestamps
+            "-start_at_zero",              # Reset output TS
+            # === INPUT ===
             "-fflags", "+genpts", "-stream_loop", "-1", "-re", "-i", self.input_url,
             "-map", "0:v", "-map", "0:a",
+            # === VIDEO ===
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-g", "30", "-keyint_min", "30",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
+            # === AUDIO ===
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-af", "aresample=async=1",    # Extra audio sync
+            # === OUTPUT ===
             "-f", "flv", "-rtmp_buffer", "1000", "-rtmp_live", "live",
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
             self.rtmp
