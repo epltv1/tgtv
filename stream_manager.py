@@ -4,17 +4,19 @@ import subprocess
 import datetime
 import os
 import uuid
-import re
 
 THUMB_DIR = "/tmp/tgtv_thumbs"
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 class Stream:
-    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, drm_key=None, map_index=None):
         self.id = stream_id
         self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
+        self.input_type = input_type
+        self.drm_key = drm_key
+        self.map_index = map_index
         self.start_time = datetime.datetime.utcnow()
         self.process = None
         self.thumb_path = f"{THUMB_DIR}/thumb_{stream_id}.jpg"
@@ -24,47 +26,41 @@ class Stream:
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
-        cmd = [
-            "ffmpeg", "-y", "-i", self.input_url,
-            "-vframes", "1", "-ss", "3",
-            "-s", "640x360", "-q:v", "2",
-            self.thumb_path
-        ]
+        cmd = ["ffmpeg", "-y", "-i", self.input_url, "-vframes", "1", "-ss", "3", "-s", "640x360", "-q:v", "2", self.thumb_path]
+        if self.map_index is not None:
+            cmd.insert(2, "-map")
+            cmd.insert(3, f"0:v:{self.map_index}")
         proc = await asyncio.create_subprocess_exec(*cmd)
         await proc.wait()
 
     async def start(self):
-        # ULTRA-STABLE FFMPEG
         cmd = [
             "ffmpeg", "-y",
-            "-fflags", "+genpts",
-            "-stream_loop", "-1",           # Loop if input ends
-            "-re", "-i", self.input_url,
-            "-c:v", "libx264", "-preset", "veryfast",
-            "-tune", "zerolatency",
+            "-fflags", "+genpts", "-stream_loop", "-1", "-re", "-i", self.input_url,
+            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-g", "30", "-keyint_min", "30",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-            "-f", "flv",
-            "-rtmp_buffer", "1000",
-            "-rtmp_live", "live",
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "10",
+            "-f", "flv", "-rtmp_buffer", "1000", "-rtmp_live", "live",
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
             self.rtmp
         ]
+        if self.drm_key:
+            cmd.insert(2, "-decryption_key")
+            cmd.insert(3, self.drm_key)
+        if self.map_index is not None:
+            cmd.insert(2, "-map")
+            cmd.insert(3, f"0:v:{self.map_index}")
 
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-
         self.thumb_task = asyncio.create_task(self.take_thumbnail())
         self.monitor_task = asyncio.create_task(self._monitor())
 
     async def _monitor(self):
-        """Watch FFmpeg stderr for disconnect"""
         while True:
             if self.process.returncode is not None:
                 break
@@ -72,7 +68,7 @@ class Stream:
             if not line:
                 break
             line = line.decode().strip()
-            if "Connection timed out" in line or "Server error" in line or "Failed to connect" in line:
+            if any(x in line for x in ["Connection timed out", "Server error", "Failed to connect"]):
                 print(f"[STREAM {self.id}] RTMP DISCONNECTED → RESTARTING")
                 await self.stop()
                 await asyncio.sleep(2)
@@ -81,7 +77,6 @@ class Stream:
         await self._on_exit()
 
     async def _on_exit(self):
-        # Only mark as dead if not restarting
         pass
 
     def uptime(self) -> str:
