@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -94,8 +94,7 @@ async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     base = context.user_data["rtmp_base"]
     key = context.user_data["stream_key"]
-    final_rtmp = f"{base.rstrip('/')}/{key.lstrip('/')}"  # SAFE JOIN
-
+    final_rtmp = f"{base.rstrip('/')}/{key.lstrip('/')}"
     context.user_data["final_rtmp"] = final_rtmp
 
     keyboard = [[InlineKeyboardButton("Start Stream", callback_data="confirm_start")]]
@@ -146,10 +145,7 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for s in streams:
-        # Force thumbnail
         await s.take_thumbnail()
-        photo_path = s.thumb_path
-
         caption = (
             f"*{s.title}*\n"
             f"ID: `{s.id}`\n"
@@ -159,9 +155,9 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("Stop Stream", callback_data=f"stop_{s.id}")]]
         markup = InlineKeyboardMarkup(keyboard)
 
-        if photo_path and os.path.exists(photo_path):
+        if os.path.exists(s.thumb_path):
             await update.message.reply_photo(
-                photo=open(photo_path, "rb"),
+                photo=open(s.thumb_path, "rb"),
                 caption=caption,
                 parse_mode="Markdown",
                 reply_markup=markup
@@ -186,9 +182,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Stream not found.")
         return
 
+    # Get uptime BEFORE stopping
+    uptime = stream.uptime()
+
     await stream.stop()
     manager.remove(sid)
-    await query.edit_message_text(f"Stream *{stream.title}* stopped.", parse_mode="Markdown")
+
+    # Send final message with uptime
+    await query.edit_message_text(
+        f"Stream *{stream.title}* ended after `{uptime}`",
+        parse_mode="Markdown"
+    )
 
 # ------------------------------------------------------------------
 def main():
