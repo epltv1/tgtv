@@ -9,7 +9,7 @@ import os
 import subprocess
 import re
 
-# ——— YOUR ORIGINAL CODE (UNCHANGED) ———
+# ——— YOUR ORIGINAL CODE (KEPT) ———
 def format_bytes(b: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if b < 1024:
@@ -34,7 +34,6 @@ async def get_system_stats():
     )
 
 async def take_screenshot(ffmpeg_pipe, width=640, height=360):
-    """Read a single JPEG frame from FFmpeg pipe."""
     try:
         async with aiofiles.open(ffmpeg_pipe, "rb") as f:
             data = await f.read()
@@ -47,9 +46,8 @@ async def take_screenshot(ffmpeg_pipe, width=640, height=360):
     except Exception:
         return None
 
-# ——— OUR ADDITIONS (NEW) ———
+# ——— OUR ADDITIONS ———
 async def run_command(cmd):
-    """Run shell command and return output"""
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -59,11 +57,9 @@ async def run_command(cmd):
     return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
 
 def ensure_dirs():
-    """Create required directories"""
     os.makedirs("/tmp/tgtv_thumbs", exist_ok=True)
 
 def is_valid_url(url: str) -> bool:
-    """Basic URL validation"""
     regex = re.compile(
         r'^(?:http|ftp)s?://'
         r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'
