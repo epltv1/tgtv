@@ -73,7 +73,7 @@ class Stream:
 
         cmd = [
             "ffmpeg", "-y",
-            "-re", "-i", self.m Broom3u8,
+            "-re", "-i", self.m3u8,  # ← FIXED: was "self.m Broom3u8"
             "-vf", vf,
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
@@ -87,7 +87,7 @@ class Stream:
         self.process = await asyncio.create_subprocess_exec(*cmd)
         self.reader_task = asyncio.create_task(self._frame_reader())
 
-    async def get_screenshot(self) -> BytesIO | None:  # <-- THIS WAS MISSING 'self'
+    async def get_screenshot(self) -> BytesIO | None:
         async with self.frame_lock:
             if not self.latest_frame:
                 return None
