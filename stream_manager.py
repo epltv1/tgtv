@@ -6,7 +6,6 @@ import os
 import uuid
 import aiofiles
 from PIL import Image
-from io import BytesIO
 
 LOGO_URL = "https://i.postimg.cc/SsLmMd8K/101-170x85.png"
 LOGO_PATH = "/tmp/tgtv_logo.png"
@@ -39,10 +38,16 @@ class Stream:
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
+
+        vf = "scale=640:360:force_original_aspect_ratio=decrease"
+        if self.overlay:
+            vf += f",movie={LOGO_PATH}[l];[in][l]overlay=W-w-10:10"
+
         cmd = [
             "ffmpeg", "-y", "-i", self.m3u8,
-            "-vframes", "1", "-ss", "3", "-q:v", "2",
-            "-s", "640x360", self.thumb_path
+            "-vframes", "1", "-ss", "3",
+            "-vf", vf,
+            "-q:v", "2", self.thumb_path
         ]
         proc = await asyncio.create_subprocess_exec(*cmd)
         await proc.wait()
@@ -75,23 +80,15 @@ class Stream:
 
     async def stop(self):
         if self.thumb_task:
-            self.thumb_task.cancel()
+            try:
+                self.thumb_task.cancel()
+            except:
+                pass
         if self.process:
             self.process.terminate()
             try:
-                await asyncio.wait_for(self.process.wait(), 5)
+                await asyncio.wait_for(self.process.wait(), 6)
             except:
                 self.process.kill()
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
-
-
-class StreamManager:
-    def __init__(self):
-        self.streams = {}
-
-    def new_id(self): return str(uuid.uuid4())[:8]
-    def add(self, s): self.streams[s.id] = s
-    def get(self, sid): return self.streams.get(sid)
-    def remove(self, sid): self.streams.pop(sid, None)
-    def all(self): return list(self.streams.values())
