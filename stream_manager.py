@@ -9,14 +9,14 @@ THUMB_DIR = "/tmp/tgtv_thumbs"
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 class Stream:
-    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, drm_key=None, map_index=None):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, logo_url=None, logo_pos=None):
         self.id = stream_id
         self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
         self.input_type = input_type
-        self.drm_key = drm_key
-        self.map_index = map_index
+        self.logo_url = logo_url
+        self.logo_pos = logo_pos
         self.start_time = datetime.datetime.utcnow()
         self.process = None
         self.thumb_path = f"{THUMB_DIR}/thumb_{stream_id}.jpg"
@@ -25,11 +25,8 @@ class Stream:
 
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
-            os.unlink(self.thumb_path)
+            os.unlink(self.logo_path)
         cmd = ["ffmpeg", "-y", "-i", self.input_url, "-vframes", "1", "-ss", "3", "-s", "640x360", "-q:v", "2", self.thumb_path]
-        if self.map_index is not None:
-            cmd.insert(2, "-map")
-            cmd.insert(3, f"0:v:{self.map_index}")
         proc = await asyncio.create_subprocess_exec(*cmd)
         await proc.wait()
 
@@ -46,14 +43,26 @@ class Stream:
             self.rtmp
         ]
 
-        # MPD: decryption_key BEFORE -i
-        if self.drm_key:
-            cmd.insert(2, "-decryption_key")
-            cmd.insert(3, self.drm_key)
+        # LOGO OVERLAY
+        if self.logo_url:
+            overlay = f"overlay="
+            if self.logo_pos == "top_left":
+                overlay += "10:10"
+            elif self.logo_pos == "top_right":
+                overlay += "main_w-overlay_w-10:10"
+            elif self.logo_pos == "bottom_left":
+                overlay += "10:main_h-overlay_h-10"
+            elif self.logo_pos == "bottom_right":
+                overlay += "main_w-overlay_w-10:main_h-overlay_h-10"
 
-        if self.map_index is not None:
-            cmd.insert(2, "-map")
-            cmd.insert(3, f"0:v:{self.map_index}")
+            cmd.insert(2, "-i")
+            cmd.insert(3, self.logo_url)
+            cmd.insert(4, "-filter_complex")
+            cmd.insert(5, f"[0:v][1:v]overlay={overlay}[v]")
+            cmd.insert(6, "-map")
+            cmd.insert(7, "[v]")
+            cmd.insert(8, "-map")
+            cmd.insert(9, "0:a")
 
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
