@@ -184,13 +184,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Get uptime BEFORE stopping
     uptime = stream.uptime()
+    title = stream.title
 
     await stream.stop()
     manager.remove(sid)
 
-    # Send final message with uptime
+    # Send final message
     await query.edit_message_text(
-        f"Stream *{stream.title}* ended after `{uptime}`",
+        f"Stream *{title}* ended after `{uptime}`",
         parse_mode="Markdown"
     )
 
