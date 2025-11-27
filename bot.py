@@ -15,7 +15,7 @@ from stream_manager import StreamManager, Stream
 
 # ------------------------------------------------------------------
 # States
-INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(8)
+INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, FILE_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(11)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +35,11 @@ async def delete_message(chat_id, message_id, bot):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
-        "M3U8 + MPD (DRM)\n"
-        "Auto best quality\n"
+        "Supports:\n"
+        "• M3U8 (auto quality)\n"
+        "• MPD + DRM\n"
+        "• MP4 / MKV\n"
+        "• YouTube\n\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -56,7 +59,7 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
     h, rem = divmod(int(uptime.total_seconds()), 3600)
     m, s = divmod(rem, 60)
-    bot_up = f"{h:02}h {m:02}m {s:02}s"  # ← FIXED
+    bot_up = f"{h:02}h {m:02}m {s:02}s"
     msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
     asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
@@ -69,7 +72,9 @@ async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
-        [InlineKeyboardButton("MPD (DRM)", callback_data="type_mpd")]
+        [InlineKeyboardButton("MPD (DRM)", callback_data="type_mpd")],
+        [InlineKeyboardButton("MP4 / MKV", callback_data="type_file")],
+        [InlineKeyboardButton("YouTube", callback_data="type_yt")]
     ]
     msg = await update.effective_chat.send_message("Choose input type:", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data["delete_queue"].append(msg.message_id)
@@ -79,7 +84,8 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    context.user_data["input_type"] = "m3u8" if query.data == "type_m3u8" else "mpd"
+    typ = query.data
+    context.user_data["input_type"] = typ
 
     msg_id = context.user_data["delete_queue"].pop()
     try:
@@ -87,14 +93,22 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    if context.user_data["input_type"] == "m3u8":
+    if typ == "type_m3u8":
         msg = await query.edit_message_text("Send the *Master M3U8 URL*:", parse_mode="Markdown")
         context.user_data["delete_queue"].append(msg.message_id)
         return M3U8_URL
-    else:
+    elif typ == "type_mpd":
         msg = await query.edit_message_text("Send the *MPD URL*:", parse_mode="Markdown")
         context.user_data["delete_queue"].append(msg.message_id)
         return MPD_URL
+    elif typ == "type_file":
+        msg = await query.edit_message_text("Send *MP4 or MKV URL*:", parse_mode="Markdown")
+        context.user_data["delete_queue"].append(msg.message_id)
+        return FILE_URL
+    elif typ == "type_yt":
+        msg = await query.edit_message_text("Send *YouTube URL*:", parse_mode="Markdown")
+        context.user_data["delete_queue"].append(msg.message_id)
+        return YOUTUBE_URL
 
 # ------------------------------------------------------------------
 async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,11 +176,48 @@ async def get_drm_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    msg = await update.effective_chat.send_message("Selecting best quality...")
-    context.user_data["delete_queue"].append(msg.message_id)
-
     context.user_data["selected_input"] = context.user_data["mpd_url"]
     context.user_data["map_index"] = 0
+
+    await ask_rtmp_base(update, context)
+    return RTMP_BASE
+
+async def get_file_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["selected_input"] = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    await ask_rtmp_base(update, context)
+    return RTMP_BASE
+
+async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message("Downloading YouTube video...")
+    context.user_data["delete_queue"].append(msg.message_id)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp", "-f", "best[height<=1080]", "-g", url,
+            stdout=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        yt_url = stdout.decode().strip()
+        context.user_data["selected_input"] = yt_url
+    except:
+        context.user_data["selected_input"] = url
 
     await asyncio.sleep(1)
     await ask_rtmp_base(update, context)
@@ -342,6 +393,8 @@ def main():
             M3U8_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_m3u8_url)],
             MPD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mpd_url)],
             DRM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_drm_key)],
+            FILE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_file_url)],
+            YOUTUBE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_youtube_url)],
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
