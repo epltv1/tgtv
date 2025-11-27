@@ -10,6 +10,8 @@ from io import BytesIO
 
 LOGO_URL = "https://i.postimg.cc/SsLmMd8K/101-170x85.png"
 LOGO_PATH = "/tmp/tgtv_logo.png"
+THUMB_DIR = "/tmp/tgtv_thumbs"
+os.makedirs(THUMB_DIR, exist_ok=True)
 
 class Stream:
     def __init__(self, stream_id: str, m3u8: str, rtmp: str, title: str, overlay: bool):
@@ -20,10 +22,8 @@ class Stream:
         self.overlay = overlay
         self.start_time = datetime.datetime.utcnow()
         self.process = None
-        self.pipe_path = f"/tmp/tgtv_pipe_{stream_id}"
-        self.reader_task = None
-        self.latest_frame = None
-        self.frame_lock = asyncio.Lock()
+        self.thumb_path = f"{THUMB_DIR}/thumb_{stream_id}.jpg"
+        self.thumb_task = None
 
     async def _download_logo(self):
         if os.path.exists(LOGO_PATH):
@@ -36,32 +36,19 @@ class Stream:
                     async with aiofiles.open(LOGO_PATH, "wb") as f:
                         await f.write(data)
 
-    async def _frame_reader(self):
-        try:
-            async with aiofiles.open(self.pipe_path, "rb") as f:
-                buffer = bytearray()
-                while True:
-                    chunk = await f.read(8192)
-                    if not chunk:
-                        break
-                    buffer.extend(chunk)
-                    # Find JPEG
-                    start = buffer.find(b'\xff\xd8')
-                    end = buffer.find(b'\xff\xd9', start)
-                    if start != -1 and end != -1:
-                        frame = buffer[start:end+2]
-                        async with self.frame_lock:
-                            self.latest_frame = bytes(frame)
-                        buffer = buffer[end+2:]
-                    await asyncio.sleep(0.05)
-        except Exception as e:
-            print(f"Reader error: {e}")
+    async def take_thumbnail(self):
+        if os.path.exists(self.thumb_path):
+            os.unlink(self.thumb_path)
+        cmd = [
+            "ffmpeg", "-y", "-i", self.m3u8,
+            "-vframes", "1", "-ss", "3", "-q:v", "2",
+            "-s", "640x360", self.thumb_path
+        ]
+        proc = await asyncio.create_subprocess_exec(*cmd)
+        await proc.wait()
 
     async def start(self):
         await self._download_logo()
-        if os.path.exists(self.pipe_path):
-            os.unlink(self.pipe_path)
-        os.mkfifo(self.pipe_path)
 
         vf = "format=yuv420p,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
         if self.overlay:
@@ -74,27 +61,11 @@ class Stream:
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
             "-r", "30", "-g", "30",
             "-c:a", "aac", "-b:a", "128k",
-            "-f", "flv", self.rtmp,
-            "-an", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
-            "-vf", "fps=1", self.pipe_path
+            "-f", "flv", self.rtmp
         ]
 
         self.process = await asyncio.create_subprocess_exec(*cmd)
-        self.reader_task = asyncio.create_task(self._frame_reader())
-
-    async def get_screenshot(self) -> BytesIO | None:
-        async with self.frame_lock:
-            if not self.latest_frame:
-                return None
-            try:
-                img = Image.open(BytesIO(self.latest_frame))
-                img = img.resize((640, 360), Image.Resampling.LANCZOS)
-                bio = BytesIO()
-                img.save(bio, "JPEG", quality=80)
-                bio.seek(0)
-                return bio
-            except:
-                return None
+        self.thumb_task = asyncio.create_task(self.take_thumbnail())
 
     def uptime(self) -> str:
         delta = datetime.datetime.utcnow() - self.start_time
@@ -103,16 +74,16 @@ class Stream:
         return f"{h:02}h {m:02}m {s:02}s"
 
     async def stop(self):
-        if self.reader_task:
-            self.reader_task.cancel()
+        if self.thumb_task:
+            self.thumb_task.cancel()
         if self.process:
             self.process.terminate()
             try:
-                await asyncio.wait_for(self.process.wait(), 8)
+                await asyncio.wait_for(self.process.wait(), 5)
             except:
                 self.process.kill()
-        if os.path.exists(self.pipe_path):
-            os.unlink(self.pipe_path)
+        if os.path.exists(self.thumb_path):
+            os.unlink(self.thumb_path)
 
 
 class StreamManager:
