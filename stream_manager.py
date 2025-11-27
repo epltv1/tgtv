@@ -4,26 +4,28 @@ import subprocess
 import datetime
 import os
 import uuid
+import re
 
 THUMB_DIR = "/tmp/tgtv_thumbs"
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 class Stream:
-    def __init__(self, stream_id: str, m3u8: str, rtmp: str, title: str):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str):
         self.id = stream_id
-        self.m3u8 = m3u8
+        self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
         self.start_time = datetime.datetime.utcnow()
         self.process = None
         self.thumb_path = f"{THUMB_DIR}/thumb_{stream_id}.jpg"
         self.thumb_task = None
+        self.monitor_task = None
 
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
         cmd = [
-            "ffmpeg", "-y", "-i", self.m3u8,
+            "ffmpeg", "-y", "-i", self.input_url,
             "-vframes", "1", "-ss", "3",
             "-s", "640x360", "-q:v", "2",
             self.thumb_path
@@ -32,15 +34,55 @@ class Stream:
         await proc.wait()
 
     async def start(self):
+        # ULTRA-STABLE FFMPEG
         cmd = [
-            "ffmpeg", "-y", "-re", "-i", self.m3u8,
+            "ffmpeg", "-y",
+            "-fflags", "+genpts",
+            "-stream_loop", "-1",           # Loop if input ends
+            "-re", "-i", self.input_url,
             "-c:v", "libx264", "-preset", "veryfast",
+            "-tune", "zerolatency",
+            "-g", "30", "-keyint_min", "30",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
-            "-c:a", "aac", "-b:a", "128k",
-            "-f", "flv", self.rtmp
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            "-f", "flv",
+            "-rtmp_buffer", "1000",
+            "-rtmp_live", "live",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "10",
+            self.rtmp
         ]
-        self.process = await asyncio.create_subprocess_exec(*cmd)
+
+        self.process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
         self.thumb_task = asyncio.create_task(self.take_thumbnail())
+        self.monitor_task = asyncio.create_task(self._monitor())
+
+    async def _monitor(self):
+        """Watch FFmpeg stderr for disconnect"""
+        while True:
+            if self.process.returncode is not None:
+                break
+            line = await self.process.stderr.readline()
+            if not line:
+                break
+            line = line.decode().strip()
+            if "Connection timed out" in line or "Server error" in line or "Failed to connect" in line:
+                print(f"[STREAM {self.id}] RTMP DISCONNECTED → RESTARTING")
+                await self.stop()
+                await asyncio.sleep(2)
+                await self.start()
+                return
+        await self._on_exit()
+
+    async def _on_exit(self):
+        # Only mark as dead if not restarting
+        pass
 
     def uptime(self) -> str:
         delta = datetime.datetime.utcnow() - self.start_time
@@ -54,7 +96,12 @@ class Stream:
                 self.thumb_task.cancel()
             except:
                 pass
-        if self.process:
+        if self.monitor_task:
+            try:
+                self.monitor_task.cancel()
+            except:
+                pass
+        if self.process and self.process.returncode is None:
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), 5)
