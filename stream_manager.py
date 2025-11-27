@@ -25,12 +25,13 @@ class Stream:
 
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
-            os.unlink(self.logo_path)
+            os.unlink(self.thumb_path)
         cmd = ["ffmpeg", "-y", "-i", self.input_url, "-vframes", "1", "-ss", "3", "-s", "640x360", "-q:v", "2", self.thumb_path]
         proc = await asyncio.create_subprocess_exec(*cmd)
         await proc.wait()
 
     async def start(self):
+        # Base command
         cmd = [
             "ffmpeg", "-y",
             "-fflags", "+genpts", "-stream_loop", "-1", "-re", "-i", self.input_url,
@@ -43,18 +44,19 @@ class Stream:
             self.rtmp
         ]
 
-        # LOGO OVERLAY
-        if self.logo_url:
-            overlay = f"overlay="
+        # === LOGO OVERLAY ONLY IF LOGO EXISTS ===
+        if self.logo_url and self.logo_pos:
+            # Determine position
             if self.logo_pos == "top_left":
-                overlay += "10:10"
+                overlay = "10:10"
             elif self.logo_pos == "top_right":
-                overlay += "main_w-overlay_w-10:10"
+                overlay = "main_w-overlay_w-10:10"
             elif self.logo_pos == "bottom_left":
-                overlay += "10:main_h-overlay_h-10"
+                overlay = "10:main_h-overlay_h-10"
             elif self.logo_pos == "bottom_right":
-                overlay += "main_w-overlay_w-10:main_h-overlay_h-10"
+                overlay = "main_w-overlay_w-10:main_h-overlay_h-10"
 
+            # Insert logo input and filter
             cmd.insert(2, "-i")
             cmd.insert(3, self.logo_url)
             cmd.insert(4, "-filter_complex")
@@ -63,6 +65,12 @@ class Stream:
             cmd.insert(7, "[v]")
             cmd.insert(8, "-map")
             cmd.insert(9, "0:a")
+        else:
+            # NO LOGO → Clean mapping
+            cmd.insert(2, "-map")
+            cmd.insert(3, "0:v")
+            cmd.insert(4, "-map")
+            cmd.insert(5, "0:a")
 
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
