@@ -3,6 +3,8 @@ import asyncio
 import logging
 import os
 import uuid
+import json
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,7 +15,7 @@ from stream_manager import StreamManager, Stream
 
 # ------------------------------------------------------------------
 # States
-M3U8, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(5)
+INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, QUALITY, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(9)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +35,8 @@ async def delete_message(chat_id, message_id, bot):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
-        "Push M3U8 to RTMP.\n"
+        "Supports M3U8 & MPD (DRM)\n"
+        "Auto quality detection\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -62,17 +65,21 @@ async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["delete_queue"] = []
 
-    # Delete /stream command
     asyncio.create_task(update.message.delete())
 
-    keyboard = [[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]]
-    msg = await update.effective_chat.send_message("Choose input:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
+        [InlineKeyboardButton("MPD (DRM)", callback_data="type_mpd")]
+    ]
+    msg = await update.effective_chat.send_message("Choose input type:", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data["delete_queue"].append(msg.message_id)
-    return M3U8
+    return INPUT_TYPE
 
-async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    context.user_data["input_type"] = "m3u8" if query.data == "type_m3u8" else "mpd"
 
     msg_id = context.user_data["delete_queue"].pop()
     try:
@@ -80,12 +87,18 @@ async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    msg = await query.edit_message_text("Send the *M3U8 URL*:", parse_mode="Markdown")
-    context.user_data["delete_queue"].append(msg.message_id)
-    return M3U8
+    if context.user_data["input_type"] == "m3u8":
+        msg = await query.edit_message_text("Send the *Master M3U8 URL*:", parse_mode="Markdown")
+        context.user_data["delete_queue"].append(msg.message_id)
+        return M3U8_URL
+    else:
+        msg = await query.edit_message_text("Send the *MPD URL*:", parse_mode="Markdown")
+        context.user_data["delete_queue"].append(msg.message_id)
+        return MPD_URL
 
-async def get_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["m3u8"] = update.message.text.strip()
+# ------------------------------------------------------------------
+async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["m3u8_master"] = update.message.text.strip()
     asyncio.create_task(update.message.delete())
 
     msg_id = context.user_data["delete_queue"].pop()
@@ -94,6 +107,135 @@ async def get_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+    msg = await update.effective_chat.send_message("Detecting qualities...")
+    context.user_data["delete_queue"].append(msg.message_id)
+    await detect_m3u8_qualities(update, context)
+    return QUALITY
+
+async def detect_m3u8_qualities(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = context.user_data["m3u8_master"]
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                text = await resp.text()
+        lines = text.splitlines()
+        qualities = []
+        base_url = url.rsplit("/", 1)[0] + "/"
+        for i, line in enumerate(lines):
+            if line.startswith("#EXT-X-STREAM-INF"):
+                bandwidth = re.search(r'BANDWIDTH=(\d+)', line)
+                resolution = re.search(r'RESOLUTION  =(\d+x\d+)', line)
+                if i + 1 < len(lines):
+                    playlist_url = lines[i + 1].strip()
+                    if not playlist_url.startswith("http"):
+                        playlist_url = base_url + playlist_url
+                    label = resolution.group(1) if resolution else "Unknown"
+                    bw = int(bandwidth.group(1)) // 1000 if bandwidth else 0
+                    qualities.append((label, bw, playlist_url))
+        context.user_data["qualities"] = qualities
+        await show_quality_buttons(update, context)
+    except:
+        await update.effective_chat.send_message("Failed to detect M3U8 qualities. Using direct URL.")
+        context.user_data["selected_input"] = url
+        await ask_rtmp_base(update, context)
+
+async def get_mpd_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mpd_url"] = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message("Send DRM Key (KID:KEY):", parse_mode="Markdown")
+    context.user_data["delete_queue"].append(msg.message_id)
+    return DRM_KEY
+
+async def get_drm_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["drm_key"] = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message("Detecting MPD qualities...")
+    context.user_data["delete_queue"].append(msg.message_id)
+    await detect_mpd_qualities(update, context)
+    return QUALITY
+
+async def detect_mpd_qualities(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = context.user_data["mpd_url"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", url,
+            stdout=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        data = json.loads(stdout)
+        qualities = []
+        for i, stream in enumerate(data.get("streams", [])):
+            if stream.get("codec_type") == "video":
+                w = stream.get("width")
+                h = stream.get("height")
+                br = stream.get("bit_rate")
+                if w and h:
+                    label = f"{w}x{h}"
+                    bw = int(br) // 1000 if br else 0
+                    qualities.append((label, bw, i))
+        context.user_data["qualities"] = qualities
+        await show_quality_buttons(update, context)
+    except:
+        await update.effective_chat.send_message("Failed to detect MPD qualities.")
+        await ask_rtmp_base(update, context)
+
+async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    qualities = context.user_data["qualities"]
+    if not qualities:
+        await update.effective_chat.send_message("No qualities found.")
+        return ConversationHandler.END
+
+    keyboard = []
+    for label, bw, _ in qualities:
+        text = f"{label} – {bw} kbps" if bw else label
+        keyboard.append([InlineKeyboardButton(text, callback_data=f"q_{len(keyboard)}")])
+    msg = await update.effective_chat.send_message("Choose quality:", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["delete_queue"].append(msg.message_id)
+    return QUALITY
+
+async def choose_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split("_")[1])
+    qualities = context.user_data["qualities"]
+    label, bw, extra = qualities[idx]
+
+    if context.user_data["input_type"] == "m3u8":
+        context.user_data["selected_input"] = extra  # URL
+    else:
+        context.user_data["selected_input"] = context.user_data["mpd_url"]
+        context.user_data["map_index"] = extra  # track index
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await query.message.delete()
+    except:
+        pass
+
+    await ask_rtmp_base(update, context)
+
+async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message(
         "Send *RTMP Base URL* (include `/` if needed):\n"
         "Example: `rtmps://dc4-1.rtmp.t.me/s/`",
@@ -160,12 +302,15 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    m3u8 = context.user_data["m3u8"]
+    input_url = context.user_data["selected_input"]
     rtmp = context.user_data["final_rtmp"]
     title = context.user_data["title"]
+    input_type = context.user_data["input_type"]
+    drm_key = context.user_data.get("drm_key")
+    map_index = context.user_data.get("map_index")
 
     sid = manager.new_id()
-    stream = Stream(sid, m3u8, rtmp, title)
+    stream = Stream(sid, input_url, rtmp, title, input_type, drm_key, map_index)
     manager.add(stream)
 
     msg_id = context.user_data["delete_queue"].pop()
@@ -176,7 +321,7 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await stream.start()
-        msg = await query.message.reply_text(
+        await query.message.reply_text(
             f"*Stream Started*\n\n"
             f"Title: `{title}`\n"
             f"ID: `{sid}`\n\n"
@@ -199,7 +344,6 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for s in streams:
-        # CRITICAL: Check if FFmpeg is really alive
         if s.process and s.process.returncode is not None:
             manager.remove(s.id)
             continue
@@ -216,27 +360,22 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-        else:
-            await update.effective_chat.send_message(
-                caption + "\n\nScreenshot loading...",
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
 
 # ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if query.data.startswith("type_"):
+        return await choose_input_type(update, context)
+    if query.data.startswith("q_"):
+        return await choose_quality(update, context)
     if not query.data.startswith("stop_"):
         return
 
     sid = query.data[5:]
     stream = manager.get(sid)
     if not stream:
-        try:
-            await query.edit_message_text("Stream already stopped.")
-        except:
-            pass
+        await query.edit_message_text("Stream already stopped.")
         return
 
     uptime = stream.uptime()
@@ -245,11 +384,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await stream.stop()
     manager.remove(sid)
 
-    try:
-        await query.message.delete()
-    except:
-        pass
-
+    await query.message.delete()
     await query.message.reply_text(
         f"Stream *{title}* ended after `{uptime}`",
         parse_mode="Markdown"
@@ -262,7 +397,11 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("stream", stream_entry)],
         states={
-            M3U8: [CallbackQueryHandler(type_m3u8, "^type_m3u8$"), MessageHandler(filters.TEXT & ~filters.COMMAND, get_m3u8)],
+            INPUT_TYPE: [CallbackQueryHandler(choose_input_type, "^type_")],
+            M3U8_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_m3u8_url)],
+            MPD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mpd_url)],
+            DRM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_drm_key)],
+            QUALITY: [CallbackQueryHandler(choose_quality, "^q_")],
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
