@@ -1,107 +1,145 @@
+# stream_manager.py
 import asyncio
 import subprocess
 import datetime
 import os
-from typing import Dict, Optional
-from utils import take_screenshot
+import uuid
+import aiofiles
+from PIL import Image
+from io import BytesIO
 
 LOGO_URL = "https://i.postimg.cc/SsLmMd8K/101-170x85.png"
 LOGO_PATH = "/tmp/tgtv_logo.png"
 
 class Stream:
-    def __init__(self, stream_id: str, m3u8: str, rtmp_url: str, title: str, overlay: bool):
+    def __init__(self, stream_id: str, m3u8: str, rtmp: str, title: str, overlay: bool):
         self.id = stream_id
         self.m3u8 = m3u8
-        self.rtmp = rtmp_url
+        self.rtmp = rtmp
         self.title = title
         self.overlay = overlay
         self.start_time = datetime.datetime.utcnow()
         self.process: Optional[asyncio.subprocess.Process] = None
-        self.screenshot_pipe_path = f"/tmp/tgtv_screenshot_{stream_id}.pipe"
-        self.screenshot_task: Optional[asyncio.Task] = None
+        self.pipe_path = f"/tmp/tgtv_pipe_{stream_id}"
+        self.reader_task: Optional[asyncio.Task] = None
+        self.latest_frame: Optional[bytes] = None
+        self.frame_lock = asyncio.Lock()
 
     async def _download_logo(self):
         if not os.path.exists(LOGO_PATH):
             import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(LOGO_URL) as resp:
-                    data = await resp.read()
-                    async with aiofiles.open(LOGO_PATH, "wb") as f:
-                        await f.write(data)
+                    if resp.status == 200:
+                        data = await resp.read()
+                        async with aiofiles.open(LOGO_PATH, "wb") as f:
+                            await f.write(data)
+
+    async def _frame_reader(self):
+        """Continuously read JPEG frames from FFmpeg pipe."""
+        try:
+            async with aiofiles.open(self.pipe_path, "rb") as f:
+                while True:
+                    # Read JPEG size (simple heuristic: read until SOI + EOI)
+                    buffer = bytearray()
+                    soi_found = False
+                    while True:
+                        chunk = await f.read(1024)
+                        if not chunk:
+                            return
+                        buffer.extend(chunk)
+                        if not soi_found and b'\xff\xd8' in buffer:
+                            soi_found = True
+                        if soi_found and b'\xff\xd9' in buffer:
+                            break
+                    async with self.frame_lock:
+                        self.latest_frame = bytes(buffer)
+        except Exception as e:
+            print(f"Frame reader error: {e}")
 
     async def start(self):
         await self._download_logo()
 
-        # Create named pipe for continuous screenshots
-        if os.path.exists(self.screenshot_pipe_path):
-            os.unlink(self.screenshot_pipe_path)
-        os.mkfifo(self.screenshot_pipe_path)
+        # Create FIFO
+        if os.path.exists(self.pipe_path):
+            os.unlink(self.pipe_path)
+        os.mkfifo(self.pipe_path)
 
-        # Build FFmpeg command
+        # FFmpeg command
+        filters = [
+            "format=yuv420p",
+            "scale=1280:720:force_original_aspect_ratio=decrease",
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        ]
+        if self.overlay:
+            filters.append("movie=/tmp/tgtv_logo.png [logo]; [in][logo] overlay=W-w-10:10 [out]")
+        else:
+            filters.append("[in] [out]")
+
+        vf = ",".join(filters.replace("[in]", "").replace("[out]", ""))
+
         cmd = [
             "ffmpeg",
+            "-y",
             "-re", "-i", self.m3u8,
-            "-vf", f"format=yuv420p,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
-        ]
-
-        if self.overlay:
-            cmd += [
-                "-i", LOGO_PATH,
-                "-filter_complex",
-                "[0:v][1:v]overlay=W-w-10:10"
-            ]
-
-        cmd += [
+            "-vf", vf,
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
+            "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
             "-g", "60", "-r", "30",
             "-c:a", "aac", "-b:a", "128k",
             "-f", "flv", self.rtmp,
-            # Continuous screenshot pipe
-            "-f", "image2pipe", "-vframes", "1", "-q:v", "3",
-            "-update", "1", self.screenshot_pipe_path
+            # Screenshot pipe
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
+            "-update", "1", self.pipe_path
         ]
 
         self.process = await asyncio.create_subprocess_exec(*cmd)
+        self.reader_task = asyncio.create_task(self._frame_reader())
 
-        # Start screenshot refresher (every 1 sec)
-        self.screenshot_task = asyncio.create_task(self._screenshot_refresher())
-
-    async def _screenshot_refresher(self):
-        while True:
-            await asyncio.sleep(1)  # FFmpeg already writes every second
-
-    async def get_screenshot(self):
-        return await take_screenshot(self.screenshot_pipe_path)
+    async def get_screenshot(self) -> Optional[BytesIO]:
+        async with self.frame_lock:
+            if not self.latest_frame:
+                return None
+            try:
+                img = Image.open(BytesIO(self.latest_frame))
+                img = img.resize((640, 360), Image.Resampling.LANCZOS)
+                bio = BytesIO()
+                img.save(bio, format="JPEG", quality=85)
+                bio.seek(0)
+                return bio
+            except Exception:
+                return None
 
     def uptime(self) -> str:
         delta = datetime.datetime.utcnow() - self.start_time
-        h, rem = divmod(delta.seconds, 3600)
+        h, rem = divmod(int(delta.total_seconds()), 3600)
         m, s = divmod(rem, 60)
-        return f"{delta.days:02}d {h:02}h {m:02}m {s:02}s"
+        return f"{h:02}h {m:02}m {s:02}s"
 
     async def stop(self):
-        if self.screenshot_task:
-            self.screenshot_task.cancel()
+        if self.reader_task:
+            self.reader_task.cancel()
         if self.process:
             self.process.terminate()
-            await self.process.wait()
-        if os.path.exists(self.screenshot_pipe_path):
-            os.unlink(self.screenshot_pipe_path)
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                self.process.kill()
+        if os.path.exists(self.pipe_path):
+            os.unlink(self.pipe_path)
 
 
 class StreamManager:
     def __init__(self):
-        self.streams: Dict[str, Stream] = {}
+        self.streams: dict[str, Stream] = {}
 
     def new_id(self) -> str:
-        import uuid
         return str(uuid.uuid4())[:8]
 
     def add(self, stream: Stream):
         self.streams[stream.id] = stream
 
-    def get(self, sid: str) -> Optional[Stream]:
+    def get(self, sid: str) -> Stream | None:
         return self.streams.get(sid)
 
     def remove(self, sid: str):
