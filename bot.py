@@ -12,7 +12,7 @@ from telegram.ext import (
 from stream_manager import StreamManager, Stream
 
 # ------------------------------------------------------------------
-M3U8, RTMP_BASE, STREAM_KEY, TITLE, OVERLAY, CONFIRM = range(6)
+M3U8, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(5)  # Removed OVERLAY
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -80,17 +80,6 @@ async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = update.message.text.strip()
-    keyboard = [
-        [InlineKeyboardButton("Yes", callback_data="overlay_yes")],
-        [InlineKeyboardButton("No", callback_data="overlay_no")]
-    ]
-    await update.message.reply_text("Overlay logo?", reply_markup=InlineKeyboardMarkup(keyboard))
-    return OVERLAY
-
-async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data["overlay"] = query.data.endswith("yes")
 
     base = context.user_data["rtmp_base"]
     key = context.user_data["stream_key"]
@@ -98,10 +87,9 @@ async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["final_rtmp"] = final_rtmp
 
     keyboard = [[InlineKeyboardButton("Start Stream", callback_data="confirm_start")]]
-    await query.edit_message_text(
+    await update.message.reply_text(
         f"*Ready to Start*\n\n"
         f"Title: `{context.user_data['title']}`\n"
-        f"Overlay: `{'Yes' if context.user_data['overlay'] else 'No'}`\n"
         f"RTMP: `{final_rtmp}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -115,10 +103,9 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m3u8 = context.user_data["m3u8"]
     rtmp = context.user_data["final_rtmp"]
     title = context.user_data["title"]
-    overlay = context.user_data["overlay"]
 
     sid = manager.new_id()
-    stream = Stream(sid, m3u8, rtmp, title, overlay)
+    stream = Stream(sid, m3u8, rtmp, title)
     manager.add(stream)
 
     try:
@@ -149,8 +136,7 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = (
             f"*{s.title}*\n"
             f"ID: `{s.id}`\n"
-            f"Uptime: `{s.uptime()}`\n"
-            f"Overlay: `{'Yes' if s.overlay else 'No'}`"
+            f"Uptime: `{s.uptime()}`"
         )
         keyboard = [[InlineKeyboardButton("Stop Stream", callback_data=f"stop_{s.id}")]]
         markup = InlineKeyboardMarkup(keyboard)
@@ -182,14 +168,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Stream not found.")
         return
 
-    # Get uptime BEFORE stopping
     uptime = stream.uptime()
     title = stream.title
 
     await stream.stop()
     manager.remove(sid)
 
-    # Send final message
     await query.edit_message_text(
         f"Stream *{title}* ended after `{uptime}`",
         parse_mode="Markdown"
@@ -206,7 +190,6 @@ def main():
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
-            OVERLAY: [CallbackQueryHandler(overlay_choice, "^overlay_")],
             CONFIRM: [CallbackQueryHandler(confirm_start, "^confirm_start$")],
         },
         fallbacks=[],
