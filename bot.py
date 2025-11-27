@@ -10,7 +10,6 @@ from stream_manager import StreamManager, Stream
 from utils import get_system_stats
 
 # ------------------------------------------------------------------
-# Conversation states
 M3U8, RTMP_URL, STREAM_KEY, TITLE, OVERLAY, CONFIRM = range(6)
 
 # ------------------------------------------------------------------
@@ -21,24 +20,16 @@ BOT_START_TIME = asyncio.get_event_loop().time()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
 # ------------------------------------------------------------------
-# Cancel any ongoing conversation and respond
-async def cancel_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE, response: str):
-    if context.user_data:
-        context.user_data.clear()
-    if update.message:
-        await update.message.reply_text(response, parse_mode="Markdown")
-    return ConversationHandler.END
-
-# ------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await cancel_and_respond(update, context,
+    await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
         "Push any HLS (m3u8) stream to RTMP destinations.\n"
-        "Use /help for commands."
+        "Use /help for commands.",
+        parse_mode="Markdown"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await cancel_and_respond(update, context,
+    await update.message.reply_text(
         "/start - Welcome message\n"
         "/help - This list\n"
         "/ping - Bot & VPS stats\n"
@@ -52,17 +43,21 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
     stats = await get_system_stats()
-    return await cancel_and_respond(update, context,
-        f"Bot Uptime: `{bot_up}`\n\n{stats}"
-    )
+    await update.message.reply_text(f"Bot Uptime: `{bot_up}`\n\n{stats}", parse_mode="Markdown")
 
 # ------------------------------------------------------------------
 # Stream creation
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await cancel_and_respond(update, context,
+    # Cancel any ongoing conversation
+    if context.user_data:
+        context.user_data.clear()
+
+    keyboard = [[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]]
+    await update.message.reply_text(
         "Choose input type:",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    return M3U8
 
 async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -148,11 +143,10 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await cancel_and_respond(update, context, "")  # We'll send per-stream messages
-    # Actual logic below
+    # Cancel any ongoing conversation
+    if context.user_data:
+        context.user_data.clear()
 
-# Run after cancel
-async def streaminfo_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streams = manager.all()
     if not streams:
         await update.message.reply_text("No active streams.\nUse /stream to start one.")
@@ -209,28 +203,16 @@ def main():
             CONFIRM: [CallbackQueryHandler(confirm_start, pattern="^confirm_start$")],
         },
         fallbacks=[],
-        per_message=False,
-        allow_reentry=True  # ← CRITICAL: allows restarting /stream anytime
+        allow_reentry=True  # Allows restarting /stream anytime
     )
 
-    # All commands cancel ongoing conv
+    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("streaminfo", streaminfo))
-    app.add_handler(CommandHandler("streaminfo", streaminfo_logic))  # dummy to avoid conflict
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Global pre-check: cancel conv on any command
-    async def pre_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message and update.message.text and update.message.text.startswith("/"):
-            if context.user_data:
-                context.user_data.clear()
-            return True
-        return False
-
-    app.add_handler(MessageHandler(filters.COMMAND, pre_check), group=-1)
 
     print("TGTV Bot is running...")
     app.run_polling()
