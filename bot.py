@@ -125,7 +125,7 @@ async def detect_m3u8_qualities(update: Update, context: ContextTypes.DEFAULT_TY
         for i, line in enumerate(lines):
             if line.startswith("#EXT-X-STREAM-INF"):
                 bandwidth = re.search(r'BANDWIDTH=(\d+)', line)
-                resolution = re.search(r'RESOLUTION  =(\d+x\d+)', line)
+                resolution = re.search(r'RESOLUTION=(\d+x\d+)', line)
                 if i + 1 < len(lines):
                     playlist_url = lines[i + 1].strip()
                     if not playlist_url.startswith("http"):
@@ -135,10 +135,11 @@ async def detect_m3u8_qualities(update: Update, context: ContextTypes.DEFAULT_TY
                     qualities.append((label, bw, playlist_url))
         context.user_data["qualities"] = qualities
         await show_quality_buttons(update, context)
-    except:
-        await update.effective_chat.send_message("Failed to detect M3U8 qualities. Using direct URL.")
+    except Exception as e:
+        await update.effective_chat.send_message(f"Error: {e}. Using direct URL.")
         context.user_data["selected_input"] = url
         await ask_rtmp_base(update, context)
+        return RTMP_BASE
 
 async def get_mpd_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mpd_url"] = update.message.text.strip()
@@ -190,9 +191,10 @@ async def detect_mpd_qualities(update: Update, context: ContextTypes.DEFAULT_TYP
                     qualities.append((label, bw, i))
         context.user_data["qualities"] = qualities
         await show_quality_buttons(update, context)
-    except:
-        await update.effective_chat.send_message("Failed to detect MPD qualities.")
+    except Exception as e:
+        await update.effective_chat.send_message(f"Error: {e}. Using default.")
         await ask_rtmp_base(update, context)
+        return RTMP_BASE
 
 async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = context.user_data["delete_queue"].pop()
@@ -222,10 +224,10 @@ async def choose_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label, bw, extra = qualities[idx]
 
     if context.user_data["input_type"] == "m3u8":
-        context.user_data["selected_input"] = extra  # URL
+        context.user_data["selected_input"] = extra
     else:
         context.user_data["selected_input"] = context.user_data["mpd_url"]
-        context.user_data["map_index"] = extra  # track index
+        context.user_data["map_index"] = extra
 
     msg_id = context.user_data["delete_queue"].pop()
     try:
@@ -234,6 +236,7 @@ async def choose_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     await ask_rtmp_base(update, context)
+    return RTMP_BASE  # ← FIXED
 
 async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message(
@@ -242,7 +245,6 @@ async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
     context.user_data["delete_queue"].append(msg.message_id)
-    return RTMP_BASE
 
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["rtmp_base"] = update.message.text.strip()
