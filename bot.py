@@ -12,10 +12,11 @@ from telegram.ext import (
     MessageHandler, ContextTypes, ConversationHandler, filters
 )
 from stream_manager import StreamManager, Stream
+from utils import ensure_dirs, is_valid_url, get_system_stats
 
 # ------------------------------------------------------------------
-# States
-INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, FILE_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(11)
+# States — FIXED: 10 states
+INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, FILE_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(10)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +51,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Welcome\n"
         "/help - Commands\n"
         "/ping - Stats\n"
+        "/stats - System\n"
         "/streaminfo - Active streams\n"
         "/stream - Start streaming"
     )
@@ -61,6 +63,12 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
     msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("Fetching system stats...")
+    stats_text = await get_system_stats()
+    await msg.edit_text(f"```\n{stats_text}\n```", parse_mode="Markdown")
     asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
 # ------------------------------------------------------------------
@@ -384,6 +392,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------------------------------------------------------
 def main():
+    ensure_dirs()  # ← CRITICAL
+
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
@@ -407,6 +417,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("streaminfo", streaminfo))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
