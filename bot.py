@@ -21,23 +21,30 @@ BOT_START_TIME = asyncio.get_event_loop().time()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
 # ------------------------------------------------------------------
+# Cancel any ongoing conversation and respond
+async def cancel_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE, response: str):
+    if context.user_data:
+        context.user_data.clear()
+    if update.message:
+        await update.message.reply_text(response, parse_mode="Markdown")
+    return ConversationHandler.END
+
+# ------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    return await cancel_and_respond(update, context,
         "*TGTV Stream Bot*\n\n"
         "Push any HLS (m3u8) stream to RTMP destinations.\n"
-        "Use /help for commands.",
-        parse_mode="Markdown"
+        "Use /help for commands."
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = (
+    return await cancel_and_respond(update, context,
         "/start - Welcome message\n"
         "/help - This list\n"
         "/ping - Bot & VPS stats\n"
         "/streaminfo - View & manage active streams\n"
         "/stream - Start a new stream"
     )
-    await update.message.reply_text(txt)
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime_bot = asyncio.get_event_loop().time() - BOT_START_TIME
@@ -45,17 +52,17 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
     stats = await get_system_stats()
-    await update.message.reply_text(f"Bot Uptime: `{bot_up}`\n\n{stats}", parse_mode="Markdown")
+    return await cancel_and_respond(update, context,
+        f"Bot Uptime: `{bot_up}`\n\n{stats}"
+    )
 
 # ------------------------------------------------------------------
-# Stream creation conversation
+# Stream creation
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]]
-    await update.message.reply_text(
+    return await cancel_and_respond(update, context,
         "Choose input type:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]])
     )
-    return M3U8
 
 async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -84,10 +91,7 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Yes", callback_data="overlay_yes")],
         [InlineKeyboardButton("No", callback_data="overlay_no")]
     ]
-    await update.message.reply_text(
-        "Overlay logo on top-right?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("Overlay logo on top-right?", reply_markup=InlineKeyboardMarkup(keyboard))
     return OVERLAY
 
 async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,12 +146,13 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Operation cancelled.")
-    return ConversationHandler.END
-
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await cancel_and_respond(update, context, "")  # We'll send per-stream messages
+    # Actual logic below
+
+# Run after cancel
+async def streaminfo_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streams = manager.all()
     if not streams:
         await update.message.reply_text("No active streams.\nUse /stream to start one.")
@@ -165,19 +170,11 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if photo:
-            await update.message.reply_photo(
-                photo,
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
+            await update.message.reply_photo(photo, caption=caption, parse_mode="Markdown", reply_markup=reply_markup)
         else:
-            await update.message.reply_text(
-                caption + "\n\nScreenshot loading...",
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
+            await update.message.reply_text(caption + "\n\nScreenshot loading...", parse_mode="Markdown", reply_markup=reply_markup)
 
+# ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -211,16 +208,29 @@ def main():
             OVERLAY: [CallbackQueryHandler(overlay_choice, pattern="^overlay_")],
             CONFIRM: [CallbackQueryHandler(confirm_start, pattern="^confirm_start$")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False
+        fallbacks=[],
+        per_message=False,
+        allow_reentry=True  # ← CRITICAL: allows restarting /stream anytime
     )
 
+    # All commands cancel ongoing conv
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("streaminfo", streaminfo))
+    app.add_handler(CommandHandler("streaminfo", streaminfo_logic))  # dummy to avoid conflict
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
+
+    # Global pre-check: cancel conv on any command
+    async def pre_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message and update.message.text and update.message.text.startswith("/"):
+            if context.user_data:
+                context.user_data.clear()
+            return True
+        return False
+
+    app.add_handler(MessageHandler(filters.COMMAND, pre_check), group=-1)
 
     print("TGTV Bot is running...")
     app.run_polling()
