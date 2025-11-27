@@ -15,8 +15,8 @@ from stream_manager import StreamManager, Stream
 from utils import ensure_dirs, is_valid_url, get_system_stats
 
 # ------------------------------------------------------------------
-# States — FIXED: 10 states
-INPUT_TYPE, M3U8_URL, MPD_URL, DRM_KEY, FILE_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(10)
+# States
+INPUT_TYPE, M3U8_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, OVERLAY_ASK, LOGO_URL, LOGO_POS, TITLE, CONFIRM = range(10)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -26,8 +26,8 @@ BOT_START_TIME = datetime.utcnow()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
 # ------------------------------------------------------------------
-async def delete_message(chat_id, message_id, bot):
-    await asyncio.sleep(2)
+async def delete_message(chat_id, message_id, bot, delay=30):
+    await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id, message_id)
     except:
@@ -36,15 +36,13 @@ async def delete_message(chat_id, message_id, bot):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
-        "Supports:\n"
         "• M3U8 (auto quality)\n"
-        "• MPD + DRM\n"
-        "• MP4 / MKV\n"
-        "• YouTube\n\n"
+        "• YouTube\n"
+        "• Logo Overlay (optional)\n\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
-    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
@@ -55,7 +53,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/streaminfo - Active streams\n"
         "/stream - Start streaming"
     )
-    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
@@ -63,25 +61,23 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
     msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
-    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("Fetching system stats...")
     stats_text = await get_system_stats()
     await msg.edit_text(f"```\n{stats_text}\n```", parse_mode="Markdown")
-    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
 
 # ------------------------------------------------------------------
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["delete_queue"] = []
 
-    asyncio.create_task(update.message.delete())
+    asyncio.create_task(update.message.delete())  # Delete command immediately
 
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
-        [InlineKeyboardButton("MPD (DRM)", callback_data="type_mpd")],
-        [InlineKeyboardButton("MP4 / MKV", callback_data="type_file")],
         [InlineKeyboardButton("YouTube", callback_data="type_yt")]
     ]
     msg = await update.effective_chat.send_message("Choose input type:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -105,14 +101,6 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await query.edit_message_text("Send the *Master M3U8 URL*:", parse_mode="Markdown")
         context.user_data["delete_queue"].append(msg.message_id)
         return M3U8_URL
-    elif typ == "type_mpd":
-        msg = await query.edit_message_text("Send the *MPD URL*:", parse_mode="Markdown")
-        context.user_data["delete_queue"].append(msg.message_id)
-        return MPD_URL
-    elif typ == "type_file":
-        msg = await query.edit_message_text("Send *MP4 or MKV URL*:", parse_mode="Markdown")
-        context.user_data["delete_queue"].append(msg.message_id)
-        return FILE_URL
     elif typ == "type_yt":
         msg = await query.edit_message_text("Send *YouTube URL*:", parse_mode="Markdown")
         context.user_data["delete_queue"].append(msg.message_id)
@@ -157,49 +145,6 @@ async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["selected_input"] = master_url
 
     await asyncio.sleep(1)
-    await ask_rtmp_base(update, context)
-    return RTMP_BASE
-
-async def get_mpd_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["mpd_url"] = update.message.text.strip()
-    asyncio.create_task(update.message.delete())
-
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await update.effective_chat.delete_message(msg_id)
-    except:
-        pass
-
-    msg = await update.effective_chat.send_message("Send DRM Key (KID:KEY):", parse_mode="Markdown")
-    context.user_data["delete_queue"].append(msg.message_id)
-    return DRM_KEY
-
-async def get_drm_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["drm_key"] = update.message.text.strip()
-    asyncio.create_task(update.message.delete())
-
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await update.effective_chat.delete_message(msg_id)
-    except:
-        pass
-
-    context.user_data["selected_input"] = context.user_data["mpd_url"]
-    context.user_data["map_index"] = 0
-
-    await ask_rtmp_base(update, context)
-    return RTMP_BASE
-
-async def get_file_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["selected_input"] = update.message.text.strip()
-    asyncio.create_task(update.message.delete())
-
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await update.effective_chat.delete_message(msg_id)
-    except:
-        pass
-
     await ask_rtmp_base(update, context)
     return RTMP_BASE
 
@@ -270,9 +215,77 @@ async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+    keyboard = [
+        [InlineKeyboardButton("Yes", callback_data="overlay_yes")],
+        [InlineKeyboardButton("No", callback_data="overlay_no")]
+    ]
+    msg = await update.effective_chat.send_message("Add logo overlay?", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["delete_queue"].append(msg.message_id)
+    return OVERLAY_ASK
+
+async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await query.message.delete()
+    except:
+        pass
+
+    if choice == "overlay_yes":
+        msg = await query.message.reply_text("Send *Logo URL* (PNG/JPG):", parse_mode="Markdown")
+        context.user_data["delete_queue"].append(msg.message_id)
+        return LOGO_URL
+    else:
+        await ask_title(update, context)
+        return TITLE
+
+async def get_logo_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["logo_url"] = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    keyboard = [
+        [InlineKeyboardButton("Top Left", callback_data="pos_tl")],
+        [InlineKeyboardButton("Top Right", callback_data="pos_tr")],
+        [InlineKeyboardButton("Bottom Left", callback_data="pos_bl")],
+        [InlineKeyboardButton("Bottom Right", callback_data="pos_br")]
+    ]
+    msg = await update.effective_chat.send_message("Where to place logo?", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["delete_queue"].append(msg.message_id)
+    return LOGO_POS
+
+async def choose_logo_pos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    pos_map = {
+        "pos_tl": "top_left",
+        "pos_tr": "top_right",
+        "pos_bl": "bottom_left",
+        "pos_br": "bottom_right"
+    }
+    context.user_data["logo_pos"] = pos_map[query.data]
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await query.message.delete()
+    except:
+        pass
+
+    await ask_title(update, context)
+    return TITLE
+
+async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message("Send the *Stream Title*:", parse_mode="Markdown")
     context.user_data["delete_queue"].append(msg.message_id)
-    return TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = update.message.text.strip()
@@ -308,11 +321,11 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rtmp = context.user_data["final_rtmp"]
     title = context.user_data["title"]
     input_type = context.user_data["input_type"]
-    drm_key = context.user_data.get("drm_key")
-    map_index = context.user_data.get("map_index")
+    logo_url = context.user_data.get("logo_url")
+    logo_pos = context.user_data.get("logo_pos")
 
     sid = manager.new_id()
-    stream = Stream(sid, input_url, rtmp, title, input_type, drm_key, map_index)
+    stream = Stream(sid, input_url, rtmp, title, input_type, logo_url, logo_pos)
     manager.add(stream)
 
     msg_id = context.user_data["delete_queue"].pop()
@@ -342,7 +355,7 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streams = manager.all()
     if not streams:
         msg = await update.effective_chat.send_message("No active streams.")
-        asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
+        asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
         return
 
     for s in streams:
@@ -369,6 +382,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data.startswith("type_"):
         return await choose_input_type(update, context)
+    if query.data.startswith("overlay_"):
+        return await overlay_choice(update, context)
+    if query.data.startswith("pos_"):
+        return await choose_logo_pos(update, context)
     if not query.data.startswith("stop_"):
         return
 
@@ -392,7 +409,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------------------------------------------------------
 def main():
-    ensure_dirs()  # ← CRITICAL
+    ensure_dirs()
 
     app = Application.builder().token(TOKEN).build()
 
@@ -401,12 +418,12 @@ def main():
         states={
             INPUT_TYPE: [CallbackQueryHandler(choose_input_type, "^type_")],
             M3U8_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_m3u8_url)],
-            MPD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mpd_url)],
-            DRM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_drm_key)],
-            FILE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_file_url)],
             YOUTUBE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_youtube_url)],
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
+            OVERLAY_ASK: [CallbackQueryHandler(overlay_choice, "^overlay_")],
+            LOGO_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_logo_url)],
+            LOGO_POS: [CallbackQueryHandler(choose_logo_pos, "^pos_")],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
             CONFIRM: [CallbackQueryHandler(confirm_start, "^confirm_start$")],
         },
