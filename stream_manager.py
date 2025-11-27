@@ -92,3 +92,24 @@ class Stream:
                 self.process.kill()
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
+
+
+# THIS WAS MISSING — ADD IT!
+class StreamManager:
+    def __init__(self):
+        self.streams = {}
+
+    def new_id(self):
+        return str(uuid.uuid4())[:8]
+
+    def add(self, stream: Stream):
+        self.streams[stream.id] = stream
+
+    def get(self, stream_id: str) -> Stream | None:
+        return self.streams.get(stream_id)
+
+    def remove(self, stream_id: str):
+        self.streams.pop(stream_id, None)
+
+    def all(self):
+        return list(self.streams.values())
