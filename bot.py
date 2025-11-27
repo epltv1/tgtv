@@ -35,8 +35,8 @@ async def delete_message(chat_id, message_id, bot):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
-        "Supports M3U8 & MPD (DRM)\n"
-        "Auto quality detection\n"
+        "M3U8 + MPD (DRM)\n"
+        "Auto quality fallback\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -117,7 +117,7 @@ async def detect_m3u8_qualities(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+            async with session.get(url, timeout=10) as resp:
                 text = await resp.text()
         lines = text.splitlines()
         qualities = []
@@ -133,12 +133,23 @@ async def detect_m3u8_qualities(update: Update, context: ContextTypes.DEFAULT_TY
                     label = resolution.group(1) if resolution else "Unknown"
                     bw = int(bandwidth.group(1)) // 1000 if bandwidth else 0
                     qualities.append((label, bw, playlist_url))
-        context.user_data["qualities"] = qualities
-        await show_quality_buttons(update, context)
+
+        if len(qualities) == 1:
+            # AUTO USE SINGLE QUALITY
+            context.user_data["selected_input"] = qualities[0][2]
+            context.user_data["qualities"] = []
+            await auto_proceed(update, context, "No multi-qualities detected. Using default.")
+            return RTMP_BASE
+        elif len(qualities) > 1:
+            context.user_data["qualities"] = qualities
+            await show_quality_buttons(update, context)
+        else:
+            context.user_data["selected_input"] = url
+            await auto_proceed(update, context, "No video tracks. Using master URL.")
+            return RTMP_BASE
     except Exception as e:
-        await update.effective_chat.send_message(f"Error: {e}. Using direct URL.")
         context.user_data["selected_input"] = url
-        await ask_rtmp_base(update, context)
+        await auto_proceed(update, context, f"Error: {e}. Using direct URL.")
         return RTMP_BASE
 
 async def get_mpd_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +170,7 @@ async def get_drm_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["drm_key"] = update.message.text.strip()
     asyncio.create_task(update.message.delete())
 
-    msg_id = context.user_data["delete_queue"].pop()
+    msg_id = context.user_data["delete_queue"].Ipop()
     try:
         await update.effective_chat.delete_message(msg_id)
     except:
@@ -175,7 +186,7 @@ async def detect_mpd_qualities(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", url,
-            stdout=asyncio.subprocess.PIPE
+            stdout=asyncio.subprocess.PIPE, timeout=15
         )
         stdout, _ = await proc.communicate()
         data = json.loads(stdout)
@@ -189,12 +200,35 @@ async def detect_mpd_qualities(update: Update, context: ContextTypes.DEFAULT_TYP
                     label = f"{w}x{h}"
                     bw = int(br) // 1000 if br else 0
                     qualities.append((label, bw, i))
-        context.user_data["qualities"] = qualities
-        await show_quality_buttons(update, context)
+
+        if len(qualities) == 1:
+            context.user_data["selected_input"] = url
+            context.user_data["map_index"] = qualities[0][2]
+            context.user_data["qualities"] = []
+            await auto_proceed(update, context, "Only one quality. Using it.")
+            return RTMP_BASE
+        elif len(qualities) > 1:
+            context.user_data["qualities"] = qualities
+            await show_quality_buttons(update, context)
+        else:
+            context.user_data["selected_input"] = url
+            await auto_proceed(update, context, "No video tracks. Using full MPD.")
+            return RTMP_BASE
     except Exception as e:
-        await update.effective_chat.send_message(f"Error: {e}. Using default.")
-        await ask_rtmp_base(update, context)
+        context.user_data["selected_input"] = url
+        await auto_proceed(update, context, f"Error: {e}. Using full MPD.")
         return RTMP_BASE
+
+async def auto_proceed(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+    msg = await update.effective_chat.send_message(text)
+    context.user_data["delete_queue"].append(msg.message_id)
+    await asyncio.sleep(1.5)
+    await ask_rtmp_base(update, context)
 
 async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = context.user_data["delete_queue"].pop()
@@ -204,10 +238,6 @@ async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         pass
 
     qualities = context.user_data["qualities"]
-    if not qualities:
-        await update.effective_chat.send_message("No qualities found.")
-        return ConversationHandler.END
-
     keyboard = []
     for label, bw, _ in qualities:
         text = f"{label} – {bw} kbps" if bw else label
@@ -236,7 +266,7 @@ async def choose_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     await ask_rtmp_base(update, context)
-    return RTMP_BASE  # ← FIXED
+    return RTMP_BASE
 
 async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message(
