@@ -12,6 +12,7 @@ from telegram.ext import (
 from stream_manager import StreamManager, Stream
 
 # ------------------------------------------------------------------
+# States
 M3U8, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(5)
 
 # ------------------------------------------------------------------
@@ -22,11 +23,10 @@ BOT_START_TIME = datetime.utcnow()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
 # ------------------------------------------------------------------
-async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE, delay: int = 2):
-    """Delete user or bot message after delay"""
-    await asyncio.sleep(delay)
+async def delete_message(chat_id, message_id, bot):
+    await asyncio.sleep(2)
     try:
-        await update.message.delete()
+        await bot.delete_message(chat_id, message_id)
     except:
         pass
 
@@ -37,8 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /help for commands.",
         parse_mode="Markdown"
     )
-    asyncio.create_task(delete_message(update, context, 30))
-    return
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
@@ -48,8 +47,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/streaminfo - Active streams\n"
         "/stream - Start streaming"
     )
-    asyncio.create_task(delete_message(update, context, 30))
-    return
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
@@ -57,13 +55,12 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
     msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
-    asyncio.create_task(delete_message(update, context, 15))
-    return
+    asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
 # ------------------------------------------------------------------
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    context.user_data["delete_queue"] = []  # Track messages to delete
+    context.user_data["delete_queue"] = []
 
     # Delete /stream command
     asyncio.create_task(update.message.delete())
@@ -77,7 +74,6 @@ async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Delete previous bot message
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await query.bot.delete_message(query.message.chat_id, msg_id)
@@ -90,11 +86,8 @@ async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["m3u8"] = update.message.text.strip()
-
-    # Delete user input
     asyncio.create_task(update.message.delete())
 
-    # Delete previous bot message
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -175,7 +168,6 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream = Stream(sid, m3u8, rtmp, title)
     manager.add(stream)
 
-    # Delete confirm message
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await query.message.delete()
@@ -191,7 +183,6 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Use /streaminfo to manage.",
             parse_mode="Markdown"
         )
-        # Keep this message
     except Exception as e:
         await query.message.reply_text(f"Failed: `{e}`", parse_mode="Markdown")
 
@@ -199,40 +190,38 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Delete /streaminfo command
     asyncio.create_task(update.message.delete())
 
     streams = manager.all()
     if not streams:
         msg = await update.effective_chat.send_message("No active streams.")
-        asyncio.create_task(delete_message(update, context, 10))
+        asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
         return
 
     for s in streams:
+        # CRITICAL: Check if FFmpeg is really alive
+        if s.process and s.process.returncode is not None:
+            manager.remove(s.id)
+            continue
+
         await s.take_thumbnail()
-        caption = (
-            f"*{s.title}*\n"
-            f"ID: `{s.id}`\n"
-            f"Uptime: `{s.uptime()}`"
-        )
+        caption = f"*{s.title}*\nID: `{s.id}`\nUptime: `{s.uptime()}`"
         keyboard = [[InlineKeyboardButton("Stop Stream", callback_data=f"stop_{s.id}")]]
         markup = InlineKeyboardMarkup(keyboard)
 
         if os.path.exists(s.thumb_path):
-            msg = await update.effective_chat.send_photo(
+            await update.effective_chat.send_photo(
                 photo=open(s.thumb_path, "rb"),
                 caption=caption,
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            # Keep this message
         else:
-            msg = await update.effective_chat.send_message(
+            await update.effective_chat.send_message(
                 caption + "\n\nScreenshot loading...",
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            # Keep
 
 # ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -256,13 +245,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await stream.stop()
     manager.remove(sid)
 
-    # Delete old streaminfo message
     try:
         await query.message.delete()
     except:
         pass
 
-    # Send final clean message
     await query.message.reply_text(
         f"Stream *{title}* ended after `{uptime}`",
         parse_mode="Markdown"
