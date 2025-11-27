@@ -1,13 +1,15 @@
 # bot.py
 import asyncio
 import logging
+import os
+import uuid
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, ConversationHandler, filters
 )
 from stream_manager import StreamManager, Stream
-from utils import get_system_stats
 
 # ------------------------------------------------------------------
 M3U8, RTMP_BASE, STREAM_KEY, TITLE, OVERLAY, CONFIRM = range(6)
@@ -15,7 +17,7 @@ M3U8, RTMP_BASE, STREAM_KEY, TITLE, OVERLAY, CONFIRM = range(6)
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 manager = StreamManager()
-BOT_START_TIME = asyncio.get_event_loop().time()
+BOT_START_TIME = datetime.utcnow()
 
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
@@ -23,7 +25,7 @@ TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
-        "Push any HLS (m3u8) to RTMP.\n"
+        "Push M3U8 to RTMP.\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -38,17 +40,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uptime_bot = asyncio.get_event_loop().time() - BOT_START_TIME
-    h, rem = divmod(int(uptime_bot), 3600)
+    uptime = datetime.utcnow() - BOT_START_TIME
+    h, rem = divmod(int(uptime.total_seconds()), 3600)
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
-    stats = await get_system_stats()
-    await update.message.reply_text(f"Bot: `{bot_up}`\n\n{stats}", parse_mode="Markdown")
+    await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
 
 # ------------------------------------------------------------------
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data:
-        context.user_data.clear()
+    context.user_data.clear()
     keyboard = [[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]]
     await update.message.reply_text("Choose input:", reply_markup=InlineKeyboardMarkup(keyboard))
     return M3U8
@@ -61,7 +61,11 @@ async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["m3u8"] = update.message.text.strip()
-    await update.message.reply_text("Send the *RTMP Base URL* (with trailing `/` if needed):\nExample: `rtmps://dc4-1.rtmp.t.me/s/`", parse_mode="Markdown")
+    await update.message.reply_text(
+        "Send *RTMP Base URL* (include `/` if needed):\n"
+        "Example: `rtmps://dc4-1.rtmp.t.me/s/`",
+        parse_mode="Markdown"
+    )
     return RTMP_BASE
 
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,16 +92,15 @@ async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data["overlay"] = query.data.endswith("yes")
 
-    # COMBINE EXACTLY AS YOU WANT — NO EXTRA SLASH
     base = context.user_data["rtmp_base"]
     key = context.user_data["stream_key"]
-    final_rtmp = f"{base.rstrip('/')}/{key.lstrip('/')}"  # Safe join
+    final_rtmp = f"{base.rstrip('/')}/{key.lstrip('/')}"  # SAFE JOIN
 
     context.user_data["final_rtmp"] = final_rtmp
 
     keyboard = [[InlineKeyboardButton("Start Stream", callback_data="confirm_start")]]
     await query.edit_message_text(
-        f"*Ready*\n\n"
+        f"*Ready to Start*\n\n"
         f"Title: `{context.user_data['title']}`\n"
         f"Overlay: `{'Yes' if context.user_data['overlay'] else 'No'}`\n"
         f"RTMP: `{final_rtmp}`",
@@ -130,44 +133,62 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         manager.remove(sid)
-        await query.edit_message_text(f"Failed:\n`{e}`", parse_mode="Markdown")
+        await query.edit_message_text(f"Failed: `{e}`", parse_mode="Markdown")
 
     return ConversationHandler.END
 
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data:
-        context.user_data.clear()
-
+    context.user_data.clear()
     streams = manager.all()
     if not streams:
         await update.message.reply_text("No active streams.")
         return
 
     for s in streams:
-        photo = await s.get_screenshot()
-        caption = f"*{s.title}*\nID: `{s.id}`\nUptime: `{s.uptime()}`\nOverlay: `{'Yes' if s.overlay else 'No'}`"
+        # Force thumbnail
+        await s.take_thumbnail()
+        photo_path = s.thumb_path
+
+        caption = (
+            f"*{s.title}*\n"
+            f"ID: `{s.id}`\n"
+            f"Uptime: `{s.uptime()}`\n"
+            f"Overlay: `{'Yes' if s.overlay else 'No'}`"
+        )
         keyboard = [[InlineKeyboardButton("Stop Stream", callback_data=f"stop_{s.id}")]]
         markup = InlineKeyboardMarkup(keyboard)
 
-        if photo:
-            await update.message.reply_photo(photo, caption=caption, parse_mode="Markdown", reply_markup=markup)
+        if photo_path and os.path.exists(photo_path):
+            await update.message.reply_photo(
+                photo=open(photo_path, "rb"),
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
         else:
-            await update.message.reply_text(caption + "\n\nScreenshot loading...", parse_mode="Markdown", reply_markup=markup)
+            await update.message.reply_text(
+                caption + "\n\nScreenshot loading...",
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
 
 # ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data.startswith("stop_"):
-        sid = query.data[5:]
-        stream = manager.get(sid)
-        if stream:
-            await stream.stop()
-            manager.remove(sid)
-            await query.edit_message_text(f"Stream *{stream.title}* stopped.")
-        else:
-            await query.edit_message_text("Stream not found.")
+    if not query.data.startswith("stop_"):
+        return
+
+    sid = query.data[5:]
+    stream = manager.get(sid)
+    if not stream:
+        await query.edit_message_text("Stream not found.")
+        return
+
+    await stream.stop()
+    manager.remove(sid)
+    await query.edit_message_text(f"Stream *{stream.title}* stopped.", parse_mode="Markdown")
 
 # ------------------------------------------------------------------
 def main():
