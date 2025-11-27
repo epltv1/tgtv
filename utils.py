@@ -9,7 +9,7 @@ import os
 import subprocess
 import re
 
-# ——— YOUR ORIGINAL CODE (KEPT) ———
+# ——— YOUR ORIGINAL CODE ———
 def format_bytes(b: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if b < 1024:
