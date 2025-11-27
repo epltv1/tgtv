@@ -12,7 +12,7 @@ from telegram.ext import (
 from stream_manager import StreamManager, Stream
 
 # ------------------------------------------------------------------
-M3U8, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(5)  # Removed OVERLAY
+M3U8, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(5)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -165,19 +165,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sid = query.data[5:]
     stream = manager.get(sid)
     if not stream:
-        await query.edit_message_text("Stream not found.")
+        try:
+            await query.edit_message_text("Stream already stopped.")
+        except:
+            pass
         return
 
+    # Get data BEFORE stop
     uptime = stream.uptime()
     title = stream.title
 
+    # Stop stream
     await stream.stop()
     manager.remove(sid)
 
-    await query.edit_message_text(
-        f"Stream *{title}* ended after `{uptime}`",
-        parse_mode="Markdown"
-    )
+    # Send NEW message (not edit) — NEVER FAILS
+    try:
+        await query.message.reply_text(
+            f"Stream *{title}* ended after `{uptime}`",
+            parse_mode="Markdown"
+        )
+        # Delete old message to avoid confusion
+        await query.message.delete()
+    except Exception as e:
+        print(f"Failed to send stop message: {e}")
 
 # ------------------------------------------------------------------
 def main():
