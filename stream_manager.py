@@ -19,10 +19,10 @@ class Stream:
         self.title = title
         self.overlay = overlay
         self.start_time = datetime.datetime.utcnow()
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.process: asyncio.subprocess.Process | None = None
         self.pipe_path = f"/tmp/tgtv_pipe_{stream_id}"
-        self.reader_task: Optional[asyncio.Task] = None
-        self.latest_frame: Optional[bytes] = None
+        self.reader_task: asyncio.Task | None = None
+        self.latest_frame: bytes | None = None
         self.frame_lock = asyncio.Lock()
 
     async def _download_logo(self):
@@ -36,11 +36,9 @@ class Stream:
                             await f.write(data)
 
     async def _frame_reader(self):
-        """Continuously read JPEG frames from FFmpeg pipe."""
         try:
             async with aiofiles.open(self.pipe_path, "rb") as f:
                 while True:
-                    # Read JPEG size (simple heuristic: read until SOI + EOI)
                     buffer = bytearray()
                     soi_found = False
                     while True:
@@ -60,35 +58,28 @@ class Stream:
     async def start(self):
         await self._download_logo()
 
-        # Create FIFO
         if os.path.exists(self.pipe_path):
             os.unlink(self.pipe_path)
         os.mkfifo(self.pipe_path)
 
-        # FFmpeg command
-        filters = [
+        vf_parts = [
             "format=yuv420p",
             "scale=1280:720:force_original_aspect_ratio=decrease",
             "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
         ]
         if self.overlay:
-            filters.append("movie=/tmp/tgtv_logo.png [logo]; [in][logo] overlay=W-w-10:10 [out]")
-        else:
-            filters.append("[in] [out]")
-
-        vf = ",".join(filters.replace("[in]", "").replace("[out]", ""))
+            vf_parts.append(f"movie={LOGO_PATH} [logo]; [in][logo] overlay=W-w-10:10")
+        vf = ",".join(vf_parts).replace("[in]", "")
 
         cmd = [
-            "ffmpeg",
-            "-y",
-            "-re", "-i", self.m3u8,
+            "ffmpeg", "-y",
+            "-re", "-i", self.m Broom3u8,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
             "-g", "60", "-r", "30",
             "-c:a", "aac", "-b:a", "128k",
             "-f", "flv", self.rtmp,
-            # Screenshot pipe
             "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
             "-update", "1", self.pipe_path
         ]
@@ -96,7 +87,7 @@ class Stream:
         self.process = await asyncio.create_subprocess_exec(*cmd)
         self.reader_task = asyncio.create_task(self._frame_reader())
 
-    async def get_screenshot(self) -> Optional[BytesIO]:
+    async def get_screenshot(self) -> BytesIO | None:  # <-- THIS WAS MISSING 'self'
         async with self.frame_lock:
             if not self.latest_frame:
                 return None
