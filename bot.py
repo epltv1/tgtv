@@ -3,7 +3,6 @@ import asyncio
 import logging
 import os
 import uuid
-import json
 import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,7 +15,7 @@ from utils import ensure_dirs, is_valid_url, get_system_stats
 
 # ------------------------------------------------------------------
 # States
-INPUT_TYPE, M3U8_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, OVERLAY_ASK, LOGO_URL, LOGO_POS, TITLE, CONFIRM = range(10)
+INPUT_TYPE, M3U8_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(7)
 
 # ------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -37,8 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
         "• M3U8 (auto quality)\n"
-        "• YouTube\n"
-        "• Logo Overlay (optional)\n\n"
+        "• YouTube\n\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -48,7 +46,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "/start - Welcome\n"
         "/help - Commands\n"
-        "/ping - Stats\n"
+        "/ping - Bot uptime\n"
         "/stats - System\n"
         "/streaminfo - Active streams\n"
         "/stream - Start streaming"
@@ -74,7 +72,7 @@ async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["delete_queue"] = []
 
-    asyncio.create_task(update.message.delete())  # Delete command immediately
+    asyncio.create_task(update.message.delete())
 
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
@@ -215,77 +213,9 @@ async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    keyboard = [
-        [InlineKeyboardButton("Yes", callback_data="overlay_yes")],
-        [InlineKeyboardButton("No", callback_data="overlay_no")]
-    ]
-    msg = await update.effective_chat.send_message("Add logo overlay?", reply_markup=InlineKeyboardMarkup(keyboard))
-    context.user_data["delete_queue"].append(msg.message_id)
-    return OVERLAY_ASK
-
-async def overlay_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    choice = query.data
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await query.message.delete()
-    except:
-        pass
-
-    if choice == "overlay_yes":
-        msg = await query.message.reply_text("Send *Logo URL* (PNG/JPG):", parse_mode="Markdown")
-        context.user_data["delete_queue"].append(msg.message_id)
-        return LOGO_URL
-    else:
-        await ask_title(update, context)
-        return TITLE
-
-async def get_logo_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["logo_url"] = update.message.text.strip()
-    asyncio.create_task(update.message.delete())
-
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await update.effective_chat.delete_message(msg_id)
-    except:
-        pass
-
-    keyboard = [
-        [InlineKeyboardButton("Top Left", callback_data="pos_tl")],
-        [InlineKeyboardButton("Top Right", callback_data="pos_tr")],
-        [InlineKeyboardButton("Bottom Left", callback_data="pos_bl")],
-        [InlineKeyboardButton("Bottom Right", callback_data="pos_br")]
-    ]
-    msg = await update.effective_chat.send_message("Where to place logo?", reply_markup=InlineKeyboardMarkup(keyboard))
-    context.user_data["delete_queue"].append(msg.message_id)
-    return LOGO_POS
-
-async def choose_logo_pos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    pos_map = {
-        "pos_tl": "top_left",
-        "pos_tr": "top_right",
-        "pos_bl": "bottom_left",
-        "pos_br": "bottom_right"
-    }
-    context.user_data["logo_pos"] = pos_map[query.data]
-
-    msg_id = context.user_data["delete_queue"].pop()
-    try:
-        await query.message.delete()
-    except:
-        pass
-
-    await ask_title(update, context)
-    return TITLE
-
-async def ask_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message("Send the *Stream Title*:", parse_mode="Markdown")
     context.user_data["delete_queue"].append(msg.message_id)
+    return TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = update.message.text.strip()
@@ -321,11 +251,9 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rtmp = context.user_data["final_rtmp"]
     title = context.user_data["title"]
     input_type = context.user_data["input_type"]
-    logo_url = context.user_data.get("logo_url")
-    logo_pos = context.user_data.get("logo_pos")
 
     sid = manager.new_id()
-    stream = Stream(sid, input_url, rtmp, title, input_type, logo_url, logo_pos)
+    stream = Stream(sid, input_url, rtmp, title, input_type)
     manager.add(stream)
 
     msg_id = context.user_data["delete_queue"].pop()
@@ -382,10 +310,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data.startswith("type_"):
         return await choose_input_type(update, context)
-    if query.data.startswith("overlay_"):
-        return await overlay_choice(update, context)
-    if query.data.startswith("pos_"):
-        return await choose_logo_pos(update, context)
     if not query.data.startswith("stop_"):
         return
 
@@ -421,9 +345,6 @@ def main():
             YOUTUBE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_youtube_url)],
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
-            OVERLAY_ASK: [CallbackQueryHandler(overlay_choice, "^overlay_")],
-            LOGO_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_logo_url)],
-            LOGO_POS: [CallbackQueryHandler(choose_logo_pos, "^pos_")],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
             CONFIRM: [CallbackQueryHandler(confirm_start, "^confirm_start$")],
         },
