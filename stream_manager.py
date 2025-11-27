@@ -45,9 +45,12 @@ class Stream:
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
             self.rtmp
         ]
+
+        # MPD: decryption_key BEFORE -i
         if self.drm_key:
             cmd.insert(2, "-decryption_key")
             cmd.insert(3, self.drm_key)
+
         if self.map_index is not None:
             cmd.insert(2, "-map")
             cmd.insert(3, f"0:v:{self.map_index}")
