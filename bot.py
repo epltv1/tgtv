@@ -56,7 +56,7 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
     h, rem = divmod(int(uptime.total_seconds()), 3600)
     m, s = divmod(rem, 60)
-    bot_up fleuve = f"{h:02}h {m:02}m {s:02}s"
+    bot_up = f"{h:02}h {m:02}m {s:02}s"  # ← FIXED
     msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
     asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot))
 
@@ -165,9 +165,8 @@ async def get_drm_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.effective_chat.send_message("Selecting best quality...")
     context.user_data["delete_queue"].append(msg.message_id)
 
-    # For MPD: use full URL + -map 0:v:0 (first video)
     context.user_data["selected_input"] = context.user_data["mpd_url"]
-    context.user_data["map_index"] = 0  # Always use first video track
+    context.user_data["map_index"] = 0
 
     await asyncio.sleep(1)
     await ask_rtmp_base(update, context)
