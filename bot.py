@@ -22,64 +22,130 @@ BOT_START_TIME = datetime.utcnow()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
 # ------------------------------------------------------------------
+async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE, delay: int = 2):
+    """Delete user or bot message after delay"""
+    await asyncio.sleep(delay)
+    try:
+        await update.message.delete()
+    except:
+        pass
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
         "Push M3U8 to RTMP.\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
+    asyncio.create_task(delete_message(update, context, 30))
+    return
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "/start - Welcome\n"
         "/help - Commands\n"
         "/ping - Stats\n"
         "/streaminfo - Active streams\n"
         "/stream - Start streaming"
     )
+    asyncio.create_task(delete_message(update, context, 30))
+    return
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
     h, rem = divmod(int(uptime.total_seconds()), 3600)
     m, s = divmod(rem, 60)
     bot_up = f"{h:02}h {m:02}m {s:02}s"
-    await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
+    msg = await update.message.reply_text(f"Bot Uptime: `{bot_up}`", parse_mode="Markdown")
+    asyncio.create_task(delete_message(update, context, 15))
+    return
 
 # ------------------------------------------------------------------
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    context.user_data["delete_queue"] = []  # Track messages to delete
+
+    # Delete /stream command
+    asyncio.create_task(update.message.delete())
+
     keyboard = [[InlineKeyboardButton("M3U8", callback_data="type_m3u8")]]
-    await update.message.reply_text("Choose input:", reply_markup=InlineKeyboardMarkup(keyboard))
+    msg = await update.effective_chat.send_message("Choose input:", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["delete_queue"].append(msg.message_id)
     return M3U8
 
 async def type_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Send the *M3U8 URL*:", parse_mode="Markdown")
+
+    # Delete previous bot message
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await query.bot.delete_message(query.message.chat_id, msg_id)
+    except:
+        pass
+
+    msg = await query.edit_message_text("Send the *M3U8 URL*:", parse_mode="Markdown")
+    context.user_data["delete_queue"].append(msg.message_id)
     return M3U8
 
 async def get_m3u8(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["m3u8"] = update.message.text.strip()
-    await update.message.reply_text(
+
+    # Delete user input
+    asyncio.create_task(update.message.delete())
+
+    # Delete previous bot message
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message(
         "Send *RTMP Base URL* (include `/` if needed):\n"
         "Example: `rtmps://dc4-1.rtmp.t.me/s/`",
         parse_mode="Markdown"
     )
+    context.user_data["delete_queue"].append(msg.message_id)
     return RTMP_BASE
 
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["rtmp_base"] = update.message.text.strip()
-    await update.message.reply_text("Send the *Stream Key*:", parse_mode="Markdown")
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message("Send the *Stream Key*:", parse_mode="Markdown")
+    context.user_data["delete_queue"].append(msg.message_id)
     return STREAM_KEY
 
 async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["stream_key"] = update.message.text.strip()
-    await update.message.reply_text("Send the *Stream Title*:", parse_mode="Markdown")
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
+
+    msg = await update.effective_chat.send_message("Send the *Stream Title*:", parse_mode="Markdown")
+    context.user_data["delete_queue"].append(msg.message_id)
     return TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = update.message.text.strip()
+    asyncio.create_task(update.message.delete())
+
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await update.effective_chat.delete_message(msg_id)
+    except:
+        pass
 
     base = context.user_data["rtmp_base"]
     key = context.user_data["stream_key"]
@@ -87,13 +153,14 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["final_rtmp"] = final_rtmp
 
     keyboard = [[InlineKeyboardButton("Start Stream", callback_data="confirm_start")]]
-    await update.message.reply_text(
+    msg = await update.effective_chat.send_message(
         f"*Ready to Start*\n\n"
         f"Title: `{context.user_data['title']}`\n"
         f"RTMP: `{final_rtmp}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    context.user_data["delete_queue"].append(msg.message_id)
     return CONFIRM
 
 async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,27 +175,37 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream = Stream(sid, m3u8, rtmp, title)
     manager.add(stream)
 
+    # Delete confirm message
+    msg_id = context.user_data["delete_queue"].pop()
+    try:
+        await query.message.delete()
+    except:
+        pass
+
     try:
         await stream.start()
-        await query.edit_message_text(
+        msg = await query.message.reply_text(
             f"*Stream Started*\n\n"
             f"Title: `{title}`\n"
             f"ID: `{sid}`\n\n"
             f"Use /streaminfo to manage.",
             parse_mode="Markdown"
         )
+        # Keep this message
     except Exception as e:
-        manager.remove(sid)
-        await query.edit_message_text(f"Failed: `{e}`", parse_mode="Markdown")
+        await query.message.reply_text(f"Failed: `{e}`", parse_mode="Markdown")
 
     return ConversationHandler.END
 
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
+    # Delete /streaminfo command
+    asyncio.create_task(update.message.delete())
+
     streams = manager.all()
     if not streams:
-        await update.message.reply_text("No active streams.")
+        msg = await update.effective_chat.send_message("No active streams.")
+        asyncio.create_task(delete_message(update, context, 10))
         return
 
     for s in streams:
@@ -142,18 +219,20 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         markup = InlineKeyboardMarkup(keyboard)
 
         if os.path.exists(s.thumb_path):
-            await update.message.reply_photo(
+            msg = await update.effective_chat.send_photo(
                 photo=open(s.thumb_path, "rb"),
                 caption=caption,
                 parse_mode="Markdown",
                 reply_markup=markup
             )
+            # Keep this message
         else:
-            await update.message.reply_text(
+            msg = await update.effective_chat.send_message(
                 caption + "\n\nScreenshot loading...",
                 parse_mode="Markdown",
                 reply_markup=markup
             )
+            # Keep
 
 # ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,24 +250,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Get data BEFORE stop
     uptime = stream.uptime()
     title = stream.title
 
-    # Stop stream
     await stream.stop()
     manager.remove(sid)
 
-    # Send NEW message (not edit) — NEVER FAILS
+    # Delete old streaminfo message
     try:
-        await query.message.reply_text(
-            f"Stream *{title}* ended after `{uptime}`",
-            parse_mode="Markdown"
-        )
-        # Delete old message to avoid confusion
         await query.message.delete()
-    except Exception as e:
-        print(f"Failed to send stop message: {e}")
+    except:
+        pass
+
+    # Send final clean message
+    await query.message.reply_text(
+        f"Stream *{title}* ended after `{uptime}`",
+        parse_mode="Markdown"
+    )
 
 # ------------------------------------------------------------------
 def main():
