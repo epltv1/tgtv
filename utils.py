@@ -1,10 +1,15 @@
+# utils.py
 import psutil
 import datetime
 import asyncio
 import aiofiles
 from PIL import Image
 from io import BytesIO
+import os
+import subprocess
+import re
 
+# ——— YOUR ORIGINAL CODE (UNCHANGED) ———
 def format_bytes(b: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if b < 1024:
@@ -41,3 +46,29 @@ async def take_screenshot(ffmpeg_pipe, width=640, height=360):
         return bio
     except Exception:
         return None
+
+# ——— OUR ADDITIONS (NEW) ———
+async def run_command(cmd):
+    """Run shell command and return output"""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
+
+def ensure_dirs():
+    """Create required directories"""
+    os.makedirs("/tmp/tgtv_thumbs", exist_ok=True)
+
+def is_valid_url(url: str) -> bool:
+    """Basic URL validation"""
+    regex = re.compile(
+        r'^(?:http|ftp)s?://'
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'
+        r'localhost|'
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+        r'(?::\d+)?'
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    return re.match(regex, url) is not None
