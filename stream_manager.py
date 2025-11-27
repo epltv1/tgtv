@@ -9,14 +9,12 @@ THUMB_DIR = "/tmp/tgtv_thumbs"
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 class Stream:
-    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, logo_url=None, logo_pos=None):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str):
         self.id = stream_id
         self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
         self.input_type = input_type
-        self.logo_url = logo_url
-        self.logo_pos = logo_pos
         self.start_time = datetime.datetime.utcnow()
         self.process = None
         self.thumb_path = f"{THUMB_DIR}/thumb_{stream_id}.jpg"
@@ -31,10 +29,10 @@ class Stream:
         await proc.wait()
 
     async def start(self):
-        # Base command
         cmd = [
             "ffmpeg", "-y",
             "-fflags", "+genpts", "-stream_loop", "-1", "-re", "-i", self.input_url,
+            "-map", "0:v", "-map", "0:a",
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-g", "30", "-keyint_min", "30",
             "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
@@ -43,34 +41,6 @@ class Stream:
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
             self.rtmp
         ]
-
-        # === LOGO OVERLAY ONLY IF LOGO EXISTS ===
-        if self.logo_url and self.logo_pos:
-            # Determine position
-            if self.logo_pos == "top_left":
-                overlay = "10:10"
-            elif self.logo_pos == "top_right":
-                overlay = "main_w-overlay_w-10:10"
-            elif self.logo_pos == "bottom_left":
-                overlay = "10:main_h-overlay_h-10"
-            elif self.logo_pos == "bottom_right":
-                overlay = "main_w-overlay_w-10:main_h-overlay_h-10"
-
-            # Insert logo input and filter
-            cmd.insert(2, "-i")
-            cmd.insert(3, self.logo_url)
-            cmd.insert(4, "-filter_complex")
-            cmd.insert(5, f"[0:v][1:v]overlay={overlay}[v]")
-            cmd.insert(6, "-map")
-            cmd.insert(7, "[v]")
-            cmd.insert(8, "-map")
-            cmd.insert(9, "0:a")
-        else:
-            # NO LOGO → Clean mapping
-            cmd.insert(2, "-map")
-            cmd.insert(3, "0:v")
-            cmd.insert(4, "-map")
-            cmd.insert(5, "0:a")
 
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -116,12 +86,13 @@ class Stream:
                 self.monitor_task.cancel()
             except:
                 pass
-        if self.process and self.process.returncode is None:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), 5)
-            except:
-                self.process.kill()
+        if self.process and self.process.returncode is not None:
+            return
+        self.process.terminate()
+        try:
+            await asyncio.wait_for(self.process.wait(), 5)
+        except:
+            self.process.kill()
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
 
