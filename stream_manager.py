@@ -31,24 +31,27 @@ class Stream:
     async def start(self):
         cmd = [
             "ffmpeg", "-y",
+            "-fflags", "+genpts+nobuffer", "-flags", "+global_header",
             "-itsoffset", "0.0", "-async", "1", "-copyts", "-start_at_zero",
-            "-fflags", "+genpts"
+            "-avoid_negative_ts", "make_zero"
         ]
 
-        # === LOOP ONLY FOR YOUTUBE VOD ===
+        # LOOP FOR YOUTUBE VOD
         if self.input_type == "yt":
-            cmd += ["-stream_loop", "-1"]  # ← LOOP VOD FOREVER
+            cmd += ["-stream_loop", "-1"]
 
         cmd += [
             "-re", "-i", self.input_url,
             "-map", "0:v", "-map", "0:a",
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-g", "30", "-keyint_min", "30",
-            "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "10000k",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
+            "-r", "30", "-pix_fmt", "yuv420p",
+            "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-            "-af", "aresample=async=1",
-            "-f", "flv", "-rtmp_buffer", "1000", "-rtmp_live", "live",
-            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
+            "-af", "aresample=async=1:first_pts=0",
+            "-f", "flv",
+            "-flvflags", "+add_keyframe_index",
+            "-rtmp_buffer", "1000", "-rtmp_live", "live",
             self.rtmp
         ]
 
@@ -63,17 +66,24 @@ class Stream:
     async def _monitor(self):
         while True:
             if self.process.returncode is not None:
-                break
+                print(f"[STREAM {self.id}] FFmpeg exited → RESTARTING...")
+                await asyncio.sleep(2)
+                await self.start()
+                return
+
             line = await self.process.stderr.readline()
             if not line:
-                break
+                continue
             line = line.decode().strip()
-            if any(x in line for x in ["Connection timed out", "Server error", "Failed to connect"]):
-                print(f"[STREAM {self.id}] RTMP DISCONNECTED → RESTARTING")
+
+            # Detect Telegram kill or network drop
+            if any(x in line for x in ["Broken pipe", "Conversion failed", "Connection reset", "Server returned 403", "Timeout"]):
+                print(f"[STREAM {self.id}] ERROR DETECTED → RESTARTING")
                 await self.stop()
                 await asyncio.sleep(2)
                 await self.start()
                 return
+
         await self._on_exit()
 
     async def _on_exit(self):
@@ -87,22 +97,15 @@ class Stream:
 
     async def stop(self):
         if self.thumb_task:
-            try:
-                self.thumb_task.cancel()
-            except:
-                pass
+            self.thumb_task.cancel()
         if self.monitor_task:
+            self.monitor_task.cancel()
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
             try:
-                self.monitor_task.cancel()
+                await asyncio.wait_for(self.process.wait(), 5)
             except:
-                pass
-        if self.process and self.process.returncode is not None:
-            return
-        self.process.terminate()
-        try:
-            await asyncio.wait_for(self.process.wait(), 5)
-        except:
-            self.process.kill()
+                self.process.kill()
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
 
