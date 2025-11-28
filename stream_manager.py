@@ -24,19 +24,27 @@ class Stream:
     async def take_thumbnail(self):
         if os.path.exists(self.thumb_path):
             os.unlink(self.thumb_path)
-        cmd = ["ffmpeg", "-y", "-i", self.input_url, "-vframes", "1", "-ss", "3", "-s", "640x360", "-q:v", "2", self.thumb_path]
+
+        cmd = [
+            "ffmpeg", "-y", "-i", self.input_url,
+            "-vframes", "1", "-ss", "5", "-s", "640x360",
+            "-q:v", "3", "-f", "image2", self.thumb_path
+        ]
+
         proc = await asyncio.create_subprocess_exec(*cmd)
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            print(f"[STREAM {self.id}] Thumbnail timeout → skipped")
 
     async def start(self):
         cmd = [
             "ffmpeg", "-y",
-            "-fflags", "+genpts+nobuffer", "-flags", "+global_header",
-            "-itsoffset", "0.0", "-async", "1", "-copyts", "-start_at_zero",
-            "-avoid_negative_ts", "make_zero"
+            "-fflags", "+genpts+nobuffer", "-avoid_negative_ts", "make_zero",
+            "-itsoffset", "0.0", "-copyts", "-start_at_zero"
         ]
 
-        # LOOP FOR YOUTUBE VOD
         if self.input_type == "yt":
             cmd += ["-stream_loop", "-1"]
 
@@ -49,8 +57,7 @@ class Stream:
             "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             "-af", "aresample=async=1:first_pts=0",
-            "-f", "flv",
-            "-flvflags", "+add_keyframe_index",
+            "-f", "flv", "-flvflags", "+add_keyframe_index",
             "-rtmp_buffer", "1000", "-rtmp_live", "live",
             self.rtmp
         ]
@@ -60,34 +67,29 @@ class Stream:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+
         self.thumb_task = asyncio.create_task(self.take_thumbnail())
         self.monitor_task = asyncio.create_task(self._monitor())
 
     async def _monitor(self):
         while True:
             if self.process.returncode is not None:
-                print(f"[STREAM {self.id}] FFmpeg exited → RESTARTING...")
-                await asyncio.sleep(2)
+                print(f"[STREAM {self.id}] FFmpeg died → RESTARTING")
+                await asyncio.sleep(3)
                 await self.start()
                 return
 
             line = await self.process.stderr.readline()
             if not line:
                 continue
-            line = line.decode().strip()
 
-            # Detect Telegram kill or network drop
-            if any(x in line for x in ["Broken pipe", "Conversion failed", "Connection reset", "Server returned 403", "Timeout"]):
-                print(f"[STREAM {self.id}] ERROR DETECTED → RESTARTING")
+            line = line.decode().strip()
+            if any(err in line for err in ["Broken pipe", "Conversion failed", "Timeout", "403", "reset"]):
+                print(f"[STREAM {self.id}] RTMP ERROR → RESTART")
                 await self.stop()
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 await self.start()
                 return
-
-        await self._on_exit()
-
-    async def _on_exit(self):
-        pass
 
     def uptime(self) -> str:
         delta = datetime.datetime.utcnow() - self.start_time
@@ -96,9 +98,9 @@ class Stream:
         return f"{h:02}h {m:02}m {s:02}s"
 
     async def stop(self):
-        if self.thumb_task:
+        if self.thumb_task and not self.thumb_task.done():
             self.thumb_task.cancel()
-        if self.monitor_task:
+        if self.monitor_task and not self.monitor_task.done():
             self.monitor_task.cancel()
         if self.process and self.process.returncode is None:
             self.process.terminate()
