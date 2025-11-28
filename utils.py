@@ -9,7 +9,6 @@ import os
 import subprocess
 import re
 
-# ——— YOUR ORIGINAL CODE ———
 def format_bytes(b: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if b < 1024:
@@ -46,7 +45,6 @@ async def take_screenshot(ffmpeg_pipe, width=640, height=360):
     except Exception:
         return None
 
-# ——— OUR ADDITIONS ———
 async def run_command(cmd):
     proc = await asyncio.create_subprocess_exec(
         *cmd,
