@@ -36,7 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "*TGTV Stream Bot*\n\n"
         "• M3U8 (auto quality)\n"
-        "• YouTube\n\n"
+        "• YouTube (VOD loops)\n\n"
         "Use /help for commands.",
         parse_mode="Markdown"
     )
@@ -49,6 +49,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ping - Bot uptime\n"
         "/stats - System\n"
         "/streaminfo - Active streams\n"
+        "/stop <id> - Stop stream\n"
         "/stream - Start streaming"
     )
     asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
@@ -71,7 +72,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["delete_queue"] = []
-
     asyncio.create_task(update.message.delete())
 
     keyboard = [
@@ -85,7 +85,6 @@ async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     typ = query.data
     context.user_data["input_type"] = typ
 
@@ -108,7 +107,6 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     master_url = update.message.text.strip()
     asyncio.create_task(update.message.delete())
-
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -149,7 +147,6 @@ async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     asyncio.create_task(update.message.delete())
-
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -192,7 +189,6 @@ async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["rtmp_base"] = update.message.text.strip()
     asyncio.create_task(update.message.delete())
-
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -206,7 +202,6 @@ async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["stream_key"] = update.message.text.strip()
     asyncio.create_task(update.message.delete())
-
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -220,7 +215,6 @@ async def get_stream_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = update.message.text.strip()
     asyncio.create_task(update.message.delete())
-
     msg_id = context.user_data["delete_queue"].pop()
     try:
         await update.effective_chat.delete_message(msg_id)
@@ -305,6 +299,21 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 # ------------------------------------------------------------------
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /stop <stream_id>")
+        return
+    sid = context.args[0]
+    stream = manager.get(sid)
+    if not stream:
+        await update.message.reply_text("Stream not found.")
+        return
+
+    await stream.stop()
+    manager.remove(sid)
+    await update.message.reply_text(f"Stream `{sid}` stopped.", parse_mode="Markdown")
+
+# ------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -319,17 +328,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Stream already stopped.")
         return
 
-    uptime = stream.uptime()
-    title = stream.title
-
     await stream.stop()
     manager.remove(sid)
-
     await query.message.delete()
-    await query.message.reply_text(
-        f"Stream *{title}* ended after `{uptime}`",
-        parse_mode="Markdown"
-    )
+    await query.message.reply_text(f"Stream *{stream.title}* stopped.", parse_mode="Markdown")
 
 # ------------------------------------------------------------------
 def main():
@@ -357,6 +359,7 @@ def main():
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("streaminfo", streaminfo))
+    app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
