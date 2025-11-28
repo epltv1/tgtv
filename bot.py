@@ -153,7 +153,7 @@ async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    msg = await update.effective_chat.send_message("Downloading YouTube video...")
+    msg = await update.effective_chat.send_message("Getting YouTube stream...")
     context.user_data["delete_queue"].append(msg.message_id)
 
     try:
@@ -256,47 +256,32 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    try:
-        await stream.start()
-        await query.message.reply_text(
-            f"*Stream Started*\n\n"
-            f"Title: `{title}`\n"
-            f"ID: `{sid}`\n\n"
-            f"Use /streaminfo to manage.",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await query.message.reply_text(f"Failed: `{e}`", parse_mode="Markdown")
+    stream.start()  # ← EXTERNAL SCRIPT, NO AWAIT
 
+    await query.message.reply_text(
+        f"*Stream Started*\n\n"
+        f"Title: `{title}`\n"
+        f"ID: `{sid}`\n\n"
+        f"Use /streaminfo",
+        parse_mode="Markdown"
+    )
     return ConversationHandler.END
 
 # ------------------------------------------------------------------
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(update.message.delete())
-
     streams = manager.all()
     if not streams:
-        msg = await update.effective_chat.send_message("No active streams.")
-        asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
+        await update.effective_chat.send_message("No active streams.")
         return
 
     for s in streams:
-        if s.process and s.process.returncode is not None:
-            manager.remove(s.id)
-            continue
-
-        await s.take_thumbnail()
-        caption = f"*{s.title}*\nID: `{s.id}`\nUptime: `{s.uptime()}`"
         keyboard = [[InlineKeyboardButton("Stop Stream", callback_data=f"stop_{s.id}")]]
-        markup = InlineKeyboardMarkup(keyboard)
-
-        if os.path.exists(s.thumb_path):
-            await update.effective_chat.send_photo(
-                photo=open(s.thumb_path, "rb"),
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
+        await update.effective_chat.send_message(
+            f"*{s.title}*\nID: `{s.id}`\nUptime: `{s.uptime()}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 # ------------------------------------------------------------------
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,7 +294,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Stream not found.")
         return
 
-    await stream.stop()
+    stream.stop()
     manager.remove(sid)
     await update.message.reply_text(f"Stream `{sid}` stopped.", parse_mode="Markdown")
 
@@ -319,19 +304,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data.startswith("type_"):
         return await choose_input_type(update, context)
-    if not query.data.startswith("stop_"):
-        return
-
-    sid = query.data[5:]
-    stream = manager.get(sid)
-    if not stream:
-        await query.edit_message_text("Stream already stopped.")
-        return
-
-    await stream.stop()
-    manager.remove(sid)
-    await query.message.delete()
-    await query.message.reply_text(f"Stream *{stream.title}* stopped.", parse_mode="Markdown")
+    if query.data.startswith("stop_"):
+        sid = query.data[5:]
+        stream = manager.get(sid)
+        if stream:
+            stream.stop()
+            manager.remove(sid)
+            await query.edit_message_text(f"Stream `{sid}` stopped.")
+        else:
+            await query.edit_message_text("Stream not found.")
 
 # ------------------------------------------------------------------
 def main():
