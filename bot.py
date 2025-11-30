@@ -245,9 +245,11 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rtmp = context.user_data["final_rtmp"]
     title = context.user_data["title"]
     input_type = context.user_data["input_type"]
+    chat_id = update.effective_chat.id
 
     sid = manager.new_id()
-    stream = Stream(sid, input_url, rtmp, title, input_type)
+    stream = Stream(sid, input_url, rtmp, title, input_type, context.bot)
+    stream.set_chat_id(chat_id)
     manager.add(stream)
 
     msg_id = context.user_data["delete_queue"].pop()
@@ -256,7 +258,7 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    stream.start()  # ← EXTERNAL SCRIPT, NO AWAIT
+    stream.start()
 
     await query.message.reply_text(
         f"*Stream Started*\n\n"
@@ -271,8 +273,9 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(update.message.delete())
     streams = manager.all()
+
     if not streams:
-        await update.effective_chat.send_message("No active streams.")
+        await update.effective_chat.send_message("*No active streams.*", parse_mode="Markdown")
         return
 
     for s in streams:
