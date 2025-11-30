@@ -3,55 +3,100 @@ import os
 import uuid
 import datetime
 import subprocess
-
-STREAM_DIR = "/home/user/tgtv/streams"
-os.makedirs(STREAM_DIR, exist_ok=True)
+import threading
+import time
+import asyncio
 
 class Stream:
-    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, bot):
         self.id = stream_id
         self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
         self.input_type = input_type
         self.start_time = datetime.datetime.utcnow()
-        self.script_path = f"{STREAM_DIR}/{stream_id}.sh"
-        self.log_path = f"{STREAM_DIR}/{stream_id}.log"
         self.process = None
+        self.thread = None
+        self.running = False
+        self.bot = bot
+        self.chat_id = None
+
+    def set_chat_id(self, chat_id):
+        self.chat_id = chat_id
+
+    def _run_ffmpeg(self):
+        while self.running:
+            cmd = [
+                "ffmpeg", "-y",
+                "-fflags", "+genpts+nobuffer", "-avoid_negative_ts", "make_zero",
+                "-reconnect", "1", "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
+                "-timeout", "30000000"
+            ]
+
+            if self.input_type == "yt":
+                cmd += ["-stream_loop", "-1"]
+
+            cmd += [
+                "-re", "-i", self.input_url,
+                "-map", "0:v", "-map", "0:a",
+                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
+                "-r", "30", "-pix_fmt", "yuv420p",
+                "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "15000k",
+                "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                "-af", "aresample=async=1:first_pts=0",
+                "-f", "flv", "-flvflags", "+add_keyframe_index",
+                "-rtmp_buffer", "1000", "-rtmp_live", "live",
+                self.rtmp
+            ]
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
+            self.process = proc
+
+            proc.wait()
+
+            if not self.running:
+                break
+
+            # Notify on crash
+            if self.chat_id and self.bot:
+                try:
+                    asyncio.create_task(
+                        self.bot.send_message(
+                            chat_id=self.chat_id,
+                            text=f"*Stream Stopped*\n\n"
+                                 f"Title: `{self.title}`\n"
+                                 f"ID: `{self.id}`\n"
+                                 f"Reason: FFmpeg crashed",
+                            parse_mode="Markdown"
+                        )
+                    )
+                except:
+                    pass
+
+            print(f"[STREAM {self.id}] FFmpeg died. Reconnecting in 3s...")
+            time.sleep(3)
 
     def start(self):
-        loop_flag = "-stream_loop -1" if self.input_type == "yt" else ""
-        script = f'''#!/bin/bash
-echo "[{self.id}] Starting stream..." > "{self.log_path}"
-while true; do
-  ffmpeg -analyzeduration 1000000 -probesize 1000000 -re -i "{self.input_url}" {loop_flag} \\
-    -c:v libx264 -preset veryfast -tune zerolatency \\
-    -b:v 4500k -maxrate 5000k -bufsize 10000k \\
-    -g 30 -keyint_min 30 -r 30 -pix_fmt yuv420p \\
-    -c:a aac -b:a 128k -ar 44100 \\
-    -af "aresample=async=1:first_pts=0" \\
-    -f flv -flvflags +add_keyframe_index \\
-    "{self.rtmp}" >> "{self.log_path}" 2>&1
-  echo "[{self.id}] FFmpeg crashed. Restarting in 2s..." >> "{self.log_path}"
-  sleep 2
-done
-'''
-        with open(self.script_path, "w") as f:
-            f.write(script)
-        os.chmod(self.script_path, 0o755)
-        self.process = subprocess.Popen([self.script_path])
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_ffmpeg, daemon=True)
+        self.thread.start()
 
     def stop(self):
+        self.running = False
         if self.process:
             self.process.terminate()
             try:
                 self.process.wait(5)
             except:
                 self.process.kill()
-        if os.path.exists(self.script_path):
-            os.unlink(self.script_path)
-        if os.path.exists(self.log_path):
-            os.unlink(self.log_path)
 
     def uptime(self) -> str:
         delta = datetime.datetime.utcnow() - self.start_time
@@ -60,7 +105,7 @@ done
         return f"{h:02}h {m:02}m {s:02}s"
 
     def is_running(self):
-        return self.process and self.process.poll() is None
+        return self.running and self.process and self.process.poll() is None
 
 
 class StreamManager:
@@ -80,4 +125,8 @@ class StreamManager:
         self.streams.pop(stream_id, None)
 
     def all(self):
-        return [s for s in self.streams.values() if s.is_running()]
+        # Clean dead streams
+        dead = [sid for sid, s in self.streams.items() if not s.is_running()]
+        for sid in dead:
+            del self.streams[sid]
+        return list(self.streams.values())
