@@ -28,22 +28,31 @@ class Stream:
         while self.running:
             cmd = [
                 "gst-launch-1.0", "-e",
-                "playbin", f"uri={self.input_url}",
-                "video-sink=videoconvert ! x264enc bitrate=4500 speed-preset=veryfast tune=zerolatency key-int=30 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp,
-                "audio-sink=audioconvert ! audioresample ! aacenc bitrate=128000 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp
+                "souphttpsrc", f"location={self.input_url}", "is-live=true",
+                "!", "hlsdemux",
+                "!", "decodebin", "name=dec",
+                "dec.", "!", "queue", "!", "videoconvert", "!", 
+                "x264enc", "bitrate=4500", "speed-preset=veryfast", "tune=zerolatency", "key-int=30",
+                "!", "video/x-h264,stream-format=byte-stream",
+                "!", "flvmux", "streamable=true", "name=mux",
+                "dec.", "!", "queue", "!", "audioconvert", "!", "audioresample", "!", 
+                "aacenc", "bitrate=128000",
+                "!", "mux.",
+                "mux.", "!", "rtmpsink", f"location={self.rtmp}"
             ]
 
-            # YouTube VOD loop
             if self.input_type == "yt":
+                # For YouTube, use playbin with loop
                 cmd = [
                     "gst-launch-1.0", "-e",
-                    "playbin", f"uri={self.input_url}", "flags=0x10",  # 0x10 = loop
+                    "playbin", f"uri={self.input_url}", "flags=0x10",
                     "video-sink=videoconvert ! x264enc bitrate=4500 speed-preset=veryfast tune=zerolatency key-int=30 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp,
                     "audio-sink=audioconvert ! audioresample ! aacenc bitrate=128000 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp
                 ]
 
             proc = subprocess.Popen(
-                cmd,
+                " ".join(cmd),
+                shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE
             )
@@ -62,7 +71,7 @@ class Stream:
                             text=f"*Stream Stopped*\n\n"
                                  f"Title: `{self.title}`\n"
                                  f"ID: `{self.id}`\n"
-                                 f"Reason: GStreamer crashed",
+                                 f"Reason: Connection lost",
                             parse_mode="Markdown"
                         )
                     )
