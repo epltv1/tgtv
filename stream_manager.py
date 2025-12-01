@@ -24,32 +24,23 @@ class Stream:
     def set_chat_id(self, chat_id):
         self.chat_id = chat_id
 
-    def _run_ffmpeg(self):
+    def _run_gstreamer(self):
         while self.running:
             cmd = [
-                "ffmpeg", "-y",
-                "-fflags", "+genpts+nobuffer", "-avoid_negative_ts", "make_zero",
-                "-reconnect", "1", "-reconnect_at_eof", "1",
-                "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
-                "-timeout", "30000000"
+                "gst-launch-1.0", "-e",
+                "playbin", f"uri={self.input_url}",
+                "video-sink=videoconvert ! x264enc bitrate=4500 speed-preset=veryfast tune=zerolatency key-int=30 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp,
+                "audio-sink=audioconvert ! audioresample ! aacenc bitrate=128000 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp
             ]
 
+            # YouTube VOD loop
             if self.input_type == "yt":
-                cmd += ["-stream_loop", "-1"]
-
-            cmd += [
-                "-re", "-i", self.input_url,
-                "-map", "0:v", "-map", "0:a",
-                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
-                "-r", "30", "-pix_fmt", "yuv420p",
-                "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "15000k",
-                "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-                "-af", "aresample=async=1:first_pts=0",
-                "-f", "flv", "-flvflags", "+add_keyframe_index",
-                "-rtmp_buffer", "1000", "-rtmp_live", "live",
-                self.rtmp
-            ]
+                cmd = [
+                    "gst-launch-1.0", "-e",
+                    "playbin", f"uri={self.input_url}", "flags=0x10",  # 0x10 = loop
+                    "video-sink=videoconvert ! x264enc bitrate=4500 speed-preset=veryfast tune=zerolatency key-int=30 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp,
+                    "audio-sink=audioconvert ! audioresample ! aacenc bitrate=128000 ! flvmux streamable=true ! rtmpsink location=" + self.rtmp
+                ]
 
             proc = subprocess.Popen(
                 cmd,
@@ -57,13 +48,12 @@ class Stream:
                 stderr=subprocess.PIPE
             )
             self.process = proc
-
             proc.wait()
 
             if not self.running:
                 break
 
-            # Notify on crash
+            # Notify crash
             if self.chat_id and self.bot:
                 try:
                     asyncio.create_task(
@@ -72,21 +62,21 @@ class Stream:
                             text=f"*Stream Stopped*\n\n"
                                  f"Title: `{self.title}`\n"
                                  f"ID: `{self.id}`\n"
-                                 f"Reason: FFmpeg crashed",
+                                 f"Reason: GStreamer crashed",
                             parse_mode="Markdown"
                         )
                     )
                 except:
                     pass
 
-            print(f"[STREAM {self.id}] FFmpeg died. Reconnecting in 3s...")
+            print(f"[STREAM {self.id}] Reconnecting in 3s...")
             time.sleep(3)
 
     def start(self):
         if self.running:
             return
         self.running = True
-        self.thread = threading.Thread(target=self._run_ffmpeg, daemon=True)
+        self.thread = threading.Thread(target=self._run_gstreamer, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -125,7 +115,6 @@ class StreamManager:
         self.streams.pop(stream_id, None)
 
     def all(self):
-        # Clean dead streams
         dead = [sid for sid, s in self.streams.items() if not s.is_running()]
         for sid in dead:
             del self.streams[sid]
