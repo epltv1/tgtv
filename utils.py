@@ -2,12 +2,9 @@
 import psutil
 import datetime
 import asyncio
-import aiofiles
-from PIL import Image
-from io import BytesIO
-import os
 import subprocess
 import re
+import os
 
 def format_bytes(b: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -32,37 +29,49 @@ async def get_system_stats():
         f"Disk: {disk.percent}% ({format_bytes(disk.used)} / {format_bytes(disk.total)})"
     )
 
-async def take_screenshot(ffmpeg_pipe, width=640, height=360):
-    try:
-        async with aiofiles.open(ffmpeg_pipe, "rb") as f:
-            data = await f.read()
-        img = Image.open(BytesIO(data))
-        img = img.resize((width, height), Image.LANCZOS)
-        bio = BytesIO()
-        img.save(bio, format="JPEG", quality=85)
-        bio.seek(0)
-        return bio
-    except Exception:
-        return None
-
-async def run_command(cmd):
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await proc.communicate()
-    return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
-
 def ensure_dirs():
     os.makedirs("/tmp/tgtv_thumbs", exist_ok=True)
+    os.makedirs("/home/user/tgtv/streams", exist_ok=True)
 
-def is_valid_url(url: str) -> bool:
-    regex = re.compile(
-        r'^(?:http|ftp)s?://'
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'
-        r'localhost|'
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-        r'(?::\d+)?'
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-    return re.match(regex, url) is not None
+# UNIVERSAL RESOLVER
+async def resolve_stream_url(url: str) -> str:
+    """Resolve ANY link → playable stream (m3u8, ts, mp4, rtmp, dash, etc.)"""
+    try:
+        # 1. yt-dlp — BEST FOR .php, embed, YouTube, DASH, sites
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp", "--get-url", "--format", "best[height<=1080]", url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        stdout, _ = await proc.communicate()
+        resolved = stdout.decode().strip()
+        if resolved and resolved.startswith("http"):
+            return resolved
+
+        # 2. curl + grep for .ts, .m3u8, .mp4, rtmp in .php or embed
+        if "play.php" in url or "embed" in url or "iframe" in url:
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-L", "--max-time", "10", url,
+                stdout=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await proc.communicate()
+            text = stdout.decode()
+
+            patterns = [
+                r'(https?://[^"\']+\.m3u8[^"\']*)',
+                r'(https?://[^"\']+\.ts[^"\']*)',
+                r'(rtmps?://[^"\']+)',
+                r'(https?://[^"\']+\.mp4[^"\']*)',
+                r'src=[\'"](https?://[^\'"]+\.m3u8)',
+                r'src=[\'"](https?://[^\'"]+\.ts)'
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+
+    except Exception as e:
+        print(f"[RESOLVE] Failed: {e}")
+
+    # 3. Fallback: return original URL (FFmpeg might play it)
+    return url
