@@ -21,12 +21,13 @@ TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 # === /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "*TGTV*\n\n"
+        "*TGTV Universal*\n\n"
         "/stream - Start\n"
         "/streaminfo - List\n"
         "/stop <id> - Stop\n"
         "/ping - Uptime\n"
-        "/stats - System",
+        "/stats - System\n\n"
+        "Supports: rtmp:// & rtmps://",
         parse_mode="Markdown"
     )
 
@@ -53,7 +54,8 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"Title: `{s.title}`\n"
             f"ID: `{s.id}`\n"
-            f"Uptime: `{s.uptime()}`",
+            f"Uptime: `{s.uptime()}`\n"
+            f"RTMP: `{s.rtmp}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Stop", callback_data=f"stop_{s.id}")]
@@ -104,19 +106,34 @@ async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.delete()
     context.user_data["selected_input"] = url
-    await update.effective_chat.send_message("RTMP Base URL:")
+    await update.effective_chat.send_message(
+        "RTMP Base URL:\n`rtmp://` or `rtmps://`",
+        parse_mode="Markdown"
+    )
     return RTMP_BASE
 
 async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.delete()
     context.user_data["selected_input"] = url
-    await update.effective_chat.send_message("RTMP Base URL:")
+    await update.effective_chat.send_message(
+        "RTMP Base URL:\n`rtmp://` or `rtmps://`",
+        parse_mode="Markdown"
+    )
     return RTMP_BASE
 
+# === UNIVERSAL RTMP INPUT ===
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base = update.message.text.strip()
     await update.message.delete()
+
+    if not base.lower().startswith(("rtmp://", "rtmps://")):
+        await update.effective_chat.send_message(
+            "Invalid RTMP URL.\nMust start with:\n`rtmp://` or `rtmps://`",
+            parse_mode="Markdown"
+        )
+        return RTMP_BASE
+
     context.user_data["rtmp_base"] = base
     await update.effective_chat.send_message("Stream Key:")
     return STREAM_KEY
@@ -132,6 +149,8 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     await update.message.delete()
     context.user_data["title"] = title
+
+    # BUILD FINAL RTMP URL (UNIVERSAL)
     rtmp = f"{context.user_data['rtmp_base'].rstrip('/')}/{context.user_data['stream_key'].lstrip('/')}"
     context.user_data["final_rtmp"] = rtmp
 
@@ -162,7 +181,7 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream.start()
 
     await query.edit_message_text(
-        f"Started\nTitle: `{context.user_data['title']}`\nID: `{sid}`",
+        f"Started\nTitle: `{context.user_data['title']}`\nID: `{sid}`\nRTMP: `{context.user_data['final_rtmp']}`",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
@@ -207,7 +226,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("TGTV — RESTORED & WORKING")
+    print("TGTV UNIVERSAL — READY")
     app.run_polling()
 
 if __name__ == "__main__":
