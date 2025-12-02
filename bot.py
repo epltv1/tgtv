@@ -25,7 +25,7 @@ async def auto_delete(chat_id, message_id, bot, delay=30):
     except: pass
 
 async def delete_command_and_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, reply_text, reply_markup=None):
-    await update.message.delete()  # INSTANT DELETE COMMAND
+    await update.message.delete()
     msg = await update.effective_chat.send_message(reply_text, parse_mode="Markdown", reply_markup=reply_markup)
     asyncio.create_task(auto_delete(update.effective_chat.id, msg.message_id, context.bot))
     return msg
@@ -36,11 +36,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context,
         "*TGTV Universal*\n\n"
         "/stream - Start\n"
-        "/abc - List\n"
+        "/streaminfo - List\n"
         "/stop <id> - Stop\n"
         "/ping - Uptime\n"
-        "/stats - System\n\n"
-        "Supports: rtmp:// & rtmps://"
+        "/stats - System"
     )
 
 # === /ping ===
@@ -58,18 +57,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await temp.edit_text(f"```\n{stats_text}\n```", parse_mode="Markdown")
     asyncio.create_task(auto_delete(update.effective_chat.id, msg.message_id, context.bot))
 
-# === /streaminfo (renamed /abc) ===
+# === /streaminfo ===
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streams = manager.all()
     if not streams:
         await delete_command_and_reply(update, context, "No active streams.")
         return
     for s in streams:
+        log_path = f"/home/user/tgtv/streams/{s.title}.log"
         msg = await update.effective_chat.send_message(
             f"Title: `{s.title}`\n"
             f"ID: `{s.id}`\n"
             f"Uptime: `{s.uptime()}`\n"
-            f"RTMP: `{s.rtmp}`",
+            f"RTMP: `{s.rtmp}`\n"
+            f"Log: `{log_path}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Stop", callback_data=f"stop_{s.id}")]])
         )
@@ -93,15 +94,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.delete()
-
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
         [InlineKeyboardButton("YouTube", callback_data="type_yt")]
     ]
-    msg = await update.effective_chat.send_message(
-        "Choose input type:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    msg = await update.effective_chat.send_message("Choose input type:", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data["msg_id"] = msg.message_id
     asyncio.create_task(auto_delete(update.effective_chat.id, msg.message_id, context.bot))
     return INPUT_TYPE
@@ -175,13 +172,19 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     sid = manager.new_id()
+    title = context.user_data["title"]
+    log_dir = f"/home/user/tgtv/streams"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = f"{log_dir}/{title}.log"
+
     stream = Stream(sid, context.user_data["selected_input"], context.user_data["final_rtmp"],
-                    context.user_data["title"], context.user_data["input_type"], context.bot)
+                    title, context.user_data["input_type"], context.bot, log_file=log_file)
     stream.set_chat_id(update.effective_chat.id)
     manager.add(stream)
     stream.start()
+
     msg = await query.edit_message_text(
-        f"Started\nTitle: `{context.user_data['title']}`\nID: `{sid}`\nRTMP: `{context.user_data['final_rtmp']}`",
+        f"Started\nTitle: `{title}`\nID: `{sid}`\nLog: `{log_file}`",
         parse_mode="Markdown"
     )
     asyncio.create_task(auto_delete(update.effective_chat.id, msg.message_id, context.bot, delay=60))
@@ -196,7 +199,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if stream:
             stream.stop()
             manager.remove(sid)
-            msg = await query.edit_message_text(f"Stopped `{sid}`")
+            if os.path.exists(stream.log_file):
+                os.remove(stream.log_file)
+            msg = await query.edit_message_text(f"Stopped `{sid}`\nLog deleted.")
             asyncio.create_task(auto_delete(update.effective_chat.id, msg.message_id, context.bot))
         else:
             msg = await query.edit_message_text("Not found.")
@@ -224,12 +229,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("abc", streaminfo))  # ← /abc = /streaminfo
+    app.add_handler(CommandHandler("streaminfo", streaminfo))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("TGTV — ADVANCED FFMPEG + INSTANT CLEAN")
+    print("TGTV — PER-STREAM LOGS + /streaminfo")
     app.run_polling()
 
 if __name__ == "__main__":
