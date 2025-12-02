@@ -2,8 +2,6 @@
 import asyncio
 import logging
 import os
-import uuid
-import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,43 +9,33 @@ from telegram.ext import (
     MessageHandler, ContextTypes, ConversationHandler, filters
 )
 from stream_manager import StreamManager, Stream
-from utils import ensure_dirs, get_system_stats, resolve_stream_url
+from utils import ensure_dirs, get_system_stats
 
 # STATES
-INPUT_TYPE, M3U8_URL, YOUTUBE_URL, IPTV_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(8)
+INPUT_TYPE, M3U8_URL, YOUTUBE_URL, RTMP_BASE, STREAM_KEY, TITLE, CONFIRM = range(7)
 
 logging.basicConfig(level=logging.INFO)
 manager = StreamManager()
 BOT_START_TIME = datetime.utcnow()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
-# DELETE MSG
 async def delete_message(chat_id, message_id, bot, delay=30):
     await asyncio.sleep(delay)
     try: await bot.delete_message(chat_id, message_id)
     except: pass
 
-# COMMANDS
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
-        "*Universal Stream Bot*\n\n"
-        "• M3U8\n"
-        "• YouTube (loop)\n"
-        "• IPTV (.php, embed, .ts)\n\n"
-        "Use /stream to start",
+        "*TGTV Pro*\n\n"
+        "• M3U8 (auto quality)\n"
+        "• YouTube (loop)\n\n"
+        "/stream to start",
         parse_mode="Markdown"
     )
     asyncio.create_task(delete_message(update.effective_chat.id, msg.message_id, context.bot, 30))
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "/start - Welcome\n"
-        "/stream - Start stream\n"
-        "/streaminfo - Active streams\n"
-        "/stop <id> - Stop\n"
-        "/ping - Uptime\n"
-        "/stats - System"
-    )
+    await update.message.reply_text("/stream /streaminfo /stop <id> /ping /stats")
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = datetime.utcnow() - BOT_START_TIME
@@ -60,7 +48,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = await get_system_stats()
     await msg.edit_text(f"```\n{stats}\n```", parse_mode="Markdown")
 
-# STREAM CONVERSATION
+# STREAM
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["delete_queue"] = []
@@ -68,10 +56,9 @@ async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
-        [InlineKeyboardButton("YouTube", callback_data="type_yt")],
-        [InlineKeyboardButton("IPTV / Embed", callback_data="type_iptv")]
+        [InlineKeyboardButton("YouTube", callback_data="type_yt")]
     ]
-    msg = await update.effective_chat.send_message("Choose input:", reply_markup=InlineKeyboardMarkup(keyboard))
+    msg = await update.effective_chat.send_message("Choose:", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data["delete_queue"].append(msg.message_id)
     return INPUT_TYPE
 
@@ -93,12 +80,7 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await query.edit_message_text("Send *YouTube URL*:", parse_mode="Markdown")
         context.user_data["delete_queue"].append(msg.message_id)
         return YOUTUBE_URL
-    elif typ == "iptv":
-        msg = await query.edit_message_text("Send *.php, embed, or any video link*:", parse_mode="Markdown")
-        context.user_data["delete_queue"].append(msg.message_id)
-        return IPTV_URL
 
-# INPUT HANDLERS
 async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     asyncio.create_task(update.message.delete())
@@ -113,32 +95,12 @@ async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ask_rtmp_base(update, context)
     return RTMP_BASE
 
-async def get_iptv_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    asyncio.create_task(update.message.delete())
-    msg_id = context.user_data["delete_queue"].pop()
-    try: await update.effective_chat.delete_message(msg_id)
-    except: pass
-
-    msg = await update.effective_chat.send_message("Resolving link...")
-    context.user_data["delete_queue"].append(msg.message_id)
-
-    real_url = await resolve_stream_url(url)
-    context.user_data["selected_input"] = real_url
-
-    await msg.edit_text(f"Resolved: `{real_url[:60]}...`", parse_mode="Markdown")
-    await asyncio.sleep(1)
-    await ask_rtmp_base(update, context)
-    return RTMP_BASE
-
-# RTMP
 async def ask_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = context.user_data["delete_queue"].pop()
     try: await update.effective_chat.delete_message(msg_id)
     except: pass
     msg = await update.effective_chat.send_message(
-        "Send *RTMP Base URL* (with `/`):\n"
-        "Example: `rtmps://dc4-1.rtmp.t.me/s/`",
+        "Send *RTMP Base*:\n`rtmps://dc4-1.rtmp.t.me/s/`",
         parse_mode="Markdown"
     )
     context.user_data["delete_queue"].append(msg.message_id)
@@ -149,7 +111,7 @@ async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = context.user_data["delete_queue"].pop()
     try: await update.effective_chat.delete_message(msg_id)
     except: pass
-    msg = await update.effective_chat.send_message("Send *Stream Key*:", parse_mode="Markdown")
+    msg = await update.effective_chat.send_message("Send *Key*:", parse_mode="Markdown")
     context.user_data["delete_queue"].append(msg.message_id)
     return STREAM_KEY
 
@@ -170,14 +132,12 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await update.effective_chat.delete_message(msg_id)
     except: pass
 
-    base = context.user_data["rtmp_base"]
-    key = context.user_data["stream_key"]
-    rtmp = f"{base.rstrip('/')}/{key.lstrip('/')}"
+    rtmp = f"{context.user_data['rtmp_base'].rstrip('/')}/{context.user_data['stream_key'].lstrip('/')}"
     context.user_data["final_rtmp"] = rtmp
 
-    keyboard = [[InlineKeyboardButton("Start Stream", callback_data="confirm_start")]]
+    keyboard = [[InlineKeyboardButton("Start", callback_data="confirm_start")]]
     msg = await update.effective_chat.send_message(
-        f"*Ready*\n\nTitle: `{context.user_data['title']}`\nRTMP: `{rtmp}`",
+        f"*Ready*\nTitle: `{context.user_data['title']}`\nRTMP: `{rtmp}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -206,20 +166,16 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream.start()
 
     await query.message.reply_text(
-        f"*Stream Started*\n\n"
-        f"Title: `{title}`\n"
-        f"ID: `{sid}`\n\n"
-        f"Use /streaminfo",
+        f"*Started*\nTitle: `{title}`\nID: `{sid}`",
         parse_mode="Markdown"
     )
     return ConversationHandler.END
 
-# STREAMINFO
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(update.message.delete())
     streams = manager.all()
     if not streams:
-        await update.effective_chat.send_message("*No active streams.*", parse_mode="Markdown")
+        await update.effective_chat.send_message("*No streams.*", parse_mode="Markdown")
         return
     for s in streams:
         keyboard = [[InlineKeyboardButton("Stop", callback_data=f"stop_{s.id}")]]
@@ -229,7 +185,6 @@ async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# STOP
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text("Usage: /stop <id>")
@@ -258,7 +213,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("Not found.")
 
-# MAIN
 def main():
     ensure_dirs()
     app = Application.builder().token(TOKEN).build()
@@ -269,7 +223,6 @@ def main():
             INPUT_TYPE: [CallbackQueryHandler(choose_input_type, "^type_")],
             M3U8_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_m3u8_url)],
             YOUTUBE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_youtube_url)],
-            IPTV_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_iptv_url)],
             RTMP_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rtmp_base)],
             STREAM_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stream_key)],
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
@@ -288,7 +241,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("Universal Bot Running...")
+    print("TGTV Pro Running...")
     app.run_polling()
 
 if __name__ == "__main__":
