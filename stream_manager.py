@@ -20,7 +20,7 @@ class Stream:
         self.running = False
         self.bot = bot
         self.chat_id = None
-        self.log_file = log_file  # ← PER-STREAM LOG
+        self.log_file = log_file
 
     def set_chat_id(self, chat_id):
         self.chat_id = chat_id
@@ -28,39 +28,31 @@ class Stream:
     def _run_ffmpeg(self):
         while self.running:
             cmd = [
-                "ffmpeg", "-y",
-                "-fflags", "+genpts+discardcorrupt", "-flags", "+low_delay",
-                "-reconnect", "1", "-reconnect_at_eof", "1",
-                "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-                "-timeout", "30000000", "-rw_timeout", "30000000",
-                "-multiple_requests", "1", "-probesize", "10000000", "-analyzeduration", "10000000"
-            ]
-
-            if self.input_type == "yt":
-                cmd += ["-stream_loop", "-1"]
-
-            cmd += [
+                "ffmpeg",
+                "-analyzeduration", "1000000",
+                "-probesize", "1000000",
                 "-re", "-i", self.input_url,
-
-                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                "-profile:v", "high", "-level", "5.2",
-                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
-                "-r", "30", "-pix_fmt", "yuv420p",
-                "-crf", "18", "-maxrate", "35000k", "-bufsize", "70000k",
-
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
-
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-b:v", "1200k",
+                "-maxrate", "1400k",
+                "-bufsize", "2000k",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                # REMOVED: -vf "scale=-1:720,fps=15"
                 "-f", "flv",
-                "-flvflags", "+add_keyframe_index",
-                "-rtmp_buffer", "1000", "-rtmp_live", "live",
-                "-thread_queue_size", "2048",
                 self.rtmp
             ]
 
             print(f"[{self.id}] STARTING: {' '.join(cmd)} >> {self.log_file}")
 
             with open(self.log_file, "w") as log:
+                log.write(f"[{datetime.datetime.utcnow()}] STREAM STARTED: {self.title}\n")
+                log.write(f"RTMP: {self.rtmp}\n")
+                log.write(f"INPUT: {self.input_url}\n")
+                log.write("-" * 50 + "\n")
+                log.flush()
+
                 proc = subprocess.Popen(
                     cmd,
                     stdout=log,
@@ -69,12 +61,19 @@ class Stream:
                 )
             self.process = proc
 
+            # Wait for exit
             proc.wait()
 
             if not self.running:
                 break
 
-            time.sleep(3)
+            # Auto-restart after 1 second
+            with open(self.log_file, "a") as log:
+                log.write(f"\n[{datetime.datetime.utcnow()}] FFMPEG STOPPED. RESTARTING IN 1s...\n")
+                log.write("-" * 50 + "\n")
+                log.flush()
+
+            time.sleep(1)
 
     def start(self):
         if self.running: return
