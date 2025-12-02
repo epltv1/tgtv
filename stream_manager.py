@@ -28,40 +28,39 @@ class Stream:
         while self.running:
             cmd = [
                 "ffmpeg", "-y",
-                "-reconnect", "1",
-                "-reconnect_at_eof", "1",
-                "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "5",
-                "-timeout", "30000000",
-                "-user_agent", "Mozilla/5.0",
-                "-headers", "Referer: https://example.com\r\n"
+                "-fflags", "+genpts+discardcorrupt", "-flags", "+low_delay",
+                "-reconnect", "1", "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                "-timeout", "30000000", "-rw_timeout", "30000000",
+                "-multiple_requests", "1", "-probesize", "10000000", "-analyzeduration", "10000000"
             ]
 
             if self.input_type == "yt":
                 cmd += ["-stream_loop", "-1"]
 
             cmd += [
-                "-i", self.input_url,
+                "-re", "-i", self.input_url,
 
-                # VIDEO — FAST & STABLE
+                # === ADVANCED VIDEO: CRF 18, 4K, HIGH QUALITY ===
                 "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-g", "30",
-                "-r", "30",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p",
+                "-preset", "veryfast", "-tune", "zerolatency",
+                "-profile:v", "high", "-level", "5.2",
+                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
+                "-r", "30", "-pix_fmt", "yuv420p",
+                "-crf", "18",           # ← EXCELLENT QUALITY
+                "-maxrate:v", "35000k", # ← 4K SUPPORT
+                "-bufsize:v", "70000k",
 
-                # AUDIO
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-ar", "44100",
+                # === AUDIO: STUDIO QUALITY ===
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
 
-                # OUTPUT — UNIVERSAL
+                # === OUTPUT: SMOOTH FLV ===
                 "-f", "flv",
-                "-rtmp_buffer", "1000",
-                "-rtmp_live", "live",
-                self.rtmp  # ← rtmp:// OR rtmps:// — ANY
+                "-flvflags", "+add_keyframe_index",
+                "-rtmp_buffer", "1000", "-rtmp_live", "live",
+                "-thread_queue_size", "2048",
+                self.rtmp
             ]
 
             print(f"[{self.id}] STARTING: {' '.join(cmd)}")
