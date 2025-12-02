@@ -28,51 +28,57 @@ class Stream:
         while self.running:
             cmd = [
                 "ffmpeg", "-y",
-                "-fflags", "+genpts+discardcorrupt", "-flags", "+low_delay",
-                "-reconnect", "1", "-reconnect_at_eof", "1",
-                "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
-                "-timeout", "30000000", "-rw_timeout", "30000000",
-                "-multiple_requests", "1", "-probesize", "10000000", "-analyzeduration", "10000000"
+                "-reconnect", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "5",
+                "-timeout", "30000000",
+                "-user_agent", "Mozilla/5.0",
+                "-headers", "Referer: https://example.com\r\n"
             ]
 
             if self.input_type == "yt":
                 cmd += ["-stream_loop", "-1"]
 
             cmd += [
-                "-re", "-i", self.input_url,
+                "-i", self.input_url,
 
-                # ENCODE SMOOTH
-                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                "-profile:v", "high", "-level", "5.2",
-                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
-                "-r", "30", "-pix_fmt", "yuv420p",
-                "-crf", "18", "-maxrate", "35000k", "-bufsize", "70000k",
+                # VIDEO — FAST & STABLE
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-g", "30",
+                "-r", "30",
+                "-crf", "23",
+                "-pix_fmt", "yuv420p",
 
                 # AUDIO
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ar", "44100",
 
-                # OUTPUT — FIXED FOR TELEGRAM
+                # OUTPUT — UNIVERSAL
                 "-f", "flv",
-                "-flvflags", "+add_keyframe_index",
-                "-rtmp_buffer", "1000", "-rtmp_live", "live",
-                "-thread_queue_size", "2048",
-                self.rtmp
+                "-rtmp_buffer", "1000",
+                "-rtmp_live", "live",
+                self.rtmp  # ← rtmp:// OR rtmps:// — ANY
             ]
+
+            print(f"[{self.id}] STARTING: {' '.join(cmd)}")
 
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                bufsize=1,
-                universal_newlines=True
+                text=True
             )
             self.process = proc
 
-            # LOG ERRORS (DEBUG)
             for line in proc.stderr:
                 if "error" in line.lower() or "failed" in line.lower():
-                    print(f"FFMPEG ERROR [{self.id}]: {line.strip()}")
+                    print(f"[{self.id}] ERROR: {line.strip()}")
+                elif "kb/s" in line:
+                    print(f"[{self.id}] {line.strip()}")
 
             proc.wait()
 
@@ -83,7 +89,7 @@ class Stream:
                 asyncio.create_task(
                     self.bot.send_message(
                         chat_id=self.chat_id,
-                        text=f"Stream Stopped\nTitle: `{self.title}`\nID: `{self.id}`",
+                        text=f"Stream died. Restarting...\nID: `{self.id}`",
                         parse_mode="Markdown"
                     )
                 )
@@ -100,7 +106,7 @@ class Stream:
         self.running = False
         if self.process:
             self.process.terminate()
-            try: self.process.wait(5)
+            try: self.process.wait(3)
             except: self.process.kill()
 
     def uptime(self):
