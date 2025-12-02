@@ -13,7 +13,7 @@ class Stream:
         self.input_url = input_url
         self.rtmp = rtmp
         self.title = title
-        self.input_type = input_type  # m3u8, yt, iptv, embed
+        self.input_type = input_type
         self.start_time = datetime.datetime.utcnow()
         self.process = None
         self.thread = None
@@ -28,10 +28,12 @@ class Stream:
         while self.running:
             cmd = [
                 "ffmpeg", "-y",
-                "-fflags", "+genpts+nobuffer", "-avoid_negative_ts", "make_zero",
+                # INPUT STABILITY
+                "-fflags", "+genpts+discardcorrupt", "-flags", "+low_delay",
                 "-reconnect", "1", "-reconnect_at_eof", "1",
                 "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
-                "-timeout", "30000000"
+                "-timeout", "30000000", "-rw_timeout", "30000000",
+                "-multiple_requests", "1", "-probesize", "10000000", "-analyzeduration", "10000000"
             ]
 
             if self.input_type == "yt":
@@ -39,13 +41,28 @@ class Stream:
 
             cmd += [
                 "-re", "-i", self.input_url,
-                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                "-b:v", "4500k", "-maxrate", "5000k", "-bufsize", "15000k",
-                "-g", "30", "-keyint_min", "30", "-r", "30", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-                "-af", "aresample=async=1:first_pts=0",
-                "-f", "flv", "-flvflags", "+add_keyframe_index",
-                "-rtmp_buffer", "1000", "-rtmp_live", "live",
+
+                # === VIDEO: ENCODE, KEEP ORIGINAL RESOLUTION ===
+                "-c:v", "libx264",
+                "-preset", "veryfast", "-tune", "zerolatency",
+                "-profile:v", "high", "-level", "5.2",  # Supports 4K+
+                "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
+                "-r", "30", "-pix_fmt", "yuv420p",
+
+                # === QUALITY: CRF (BETTER THAN FIXED BITRATE) ===
+                "-crf", "18",  # 18 = Excellent, 23 = Good, 28 = OK
+                "-maxrate:v", "35000k",  # High cap for 4K/8K
+                "-bufsize:v", "70000k",
+
+                # === AUDIO: HIGH QUALITY ===
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
+
+                # === OUTPUT: SMOOTH FLV ===
+                "-f", "flv",
+                "-flvflags", "+add_keyframe_index",
+                "-rtmp_buffer", "4000", "-rtmp_live", "live",
+                "-thread_queue_size", "2048",
                 self.rtmp
             ]
 
@@ -60,24 +77,16 @@ class Stream:
             if not self.running:
                 break
 
-            # Notify crash
             if self.chat_id and self.bot:
-                try:
-                    asyncio.create_task(
-                        self.bot.send_message(
-                            chat_id=self.chat_id,
-                            text=f"*Stream Stopped*\n\n"
-                                 f"Title: `{self.title}`\n"
-                                 f"ID: `{self.id}`\n"
-                                 f"Reason: Source lost",
-                            parse_mode="Markdown"
-                        )
+                asyncio.create_task(
+                    self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=f"*Stream Stopped*\nTitle: `{self.title}`\nID: `{self.id}`",
+                        parse_mode="Markdown"
                     )
-                except:
-                    pass
+                )
 
-            print(f"[STREAM {self.id}] Reconnecting in 3s...")
-            time.sleep(3)
+            time.sleep(2)
 
     def start(self):
         if self.running: return
