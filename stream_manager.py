@@ -8,7 +8,7 @@ import time
 import asyncio
 
 class Stream:
-    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, bot):
+    def __init__(self, stream_id: str, input_url: str, rtmp: str, title: str, input_type: str, bot, log_file=None):
         self.id = stream_id
         self.input_url = input_url
         self.rtmp = rtmp
@@ -20,6 +20,7 @@ class Stream:
         self.running = False
         self.bot = bot
         self.chat_id = None
+        self.log_file = log_file  # ← PER-STREAM LOG
 
     def set_chat_id(self, chat_id):
         self.chat_id = chat_id
@@ -41,21 +42,15 @@ class Stream:
             cmd += [
                 "-re", "-i", self.input_url,
 
-                # === ADVANCED VIDEO: CRF 18, 4K, HIGH QUALITY ===
-                "-c:v", "libx264",
-                "-preset", "veryfast", "-tune", "zerolatency",
+                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
                 "-profile:v", "high", "-level", "5.2",
                 "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
                 "-r", "30", "-pix_fmt", "yuv420p",
-                "-crf", "18",           # ← EXCELLENT QUALITY
-                "-maxrate:v", "35000k", # ← 4K SUPPORT
-                "-bufsize:v", "70000k",
+                "-crf", "18", "-maxrate", "35000k", "-bufsize", "70000k",
 
-                # === AUDIO: STUDIO QUALITY ===
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
                 "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
 
-                # === OUTPUT: SMOOTH FLV ===
                 "-f", "flv",
                 "-flvflags", "+add_keyframe_index",
                 "-rtmp_buffer", "1000", "-rtmp_live", "live",
@@ -63,35 +58,21 @@ class Stream:
                 self.rtmp
             ]
 
-            print(f"[{self.id}] STARTING: {' '.join(cmd)}")
+            print(f"[{self.id}] STARTING: {' '.join(cmd)} >> {self.log_file}")
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            with open(self.log_file, "w") as log:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=log,
+                    stderr=log,
+                    text=True
+                )
             self.process = proc
-
-            for line in proc.stderr:
-                if "error" in line.lower() or "failed" in line.lower():
-                    print(f"[{self.id}] ERROR: {line.strip()}")
-                elif "kb/s" in line:
-                    print(f"[{self.id}] {line.strip()}")
 
             proc.wait()
 
             if not self.running:
                 break
-
-            if self.chat_id and self.bot:
-                asyncio.create_task(
-                    self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=f"Stream died. Restarting...\nID: `{self.id}`",
-                        parse_mode="Markdown"
-                    )
-                )
 
             time.sleep(3)
 
