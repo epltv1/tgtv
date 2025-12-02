@@ -18,25 +18,16 @@ manager = StreamManager()
 BOT_START_TIME = datetime.utcnow()
 TOKEN = "7454188408:AAGnFnyFGDNk2l7NhyhSmoS5BYz0R82ZOTU"
 
-# COOL STYLE
-EMOJI = "⚡"
-LIVE = "LIVE"
-STOPPED = "OFF"
-
 # === /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
-        [InlineKeyboardButton("YouTube", callback_data="type_yt")]
-    ]
     await update.message.reply_text(
-        f"*{EMOJI} TGTV LIVE*\n\n"
-        f"• 4K Adaptive\n"
-        f"• No Lag • 24/7\n"
-        f"• Smooth Encoding\n\n"
-        f"Choose source:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "*TGTV*\n\n"
+        "/stream - Start\n"
+        "/streaminfo - List\n"
+        "/stop <id> - Stop\n"
+        "/ping - Uptime\n"
+        "/stats - System",
+        parse_mode="Markdown"
     )
 
 # === /ping ===
@@ -56,14 +47,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def streaminfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streams = manager.all()
     if not streams:
-        await update.message.reply_text(f"{EMOJI} No active streams.", parse_mode="Markdown")
+        await update.message.reply_text("No active streams.")
         return
     for s in streams:
         await update.message.reply_text(
-            f"*{s.title}*\n"
+            f"Title: `{s.title}`\n"
             f"ID: `{s.id}`\n"
-            f"Uptime: `{s.uptime()}`\n"
-            f"Status: `{LIVE}`",
+            f"Uptime: `{s.uptime()}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Stop", callback_data=f"stop_{s.id}")]
@@ -87,18 +77,19 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === /stream ===
 async def stream_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    await update.message.delete()
+
     keyboard = [
         [InlineKeyboardButton("M3U8", callback_data="type_m3u8")],
         [InlineKeyboardButton("YouTube", callback_data="type_yt")]
     ]
-    await update.message.reply_text(
-        f"{EMOJI} Choose source:",
-        parse_mode="Markdown",
+    msg = await update.effective_chat.send_message(
+        "Choose input type:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    context.user_data["msg_id"] = msg.message_id
     return INPUT_TYPE
 
-# === INPUT TYPE ===
 async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -109,22 +100,20 @@ async def choose_input_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text)
     return M3U8_URL if typ == "m3u8" else YOUTUBE_URL
 
-# === M3U8 / YOUTUBE ===
 async def get_m3u8_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.delete()
     context.user_data["selected_input"] = url
-    await update.effective_chat.send_message("RTMP Base:\n`rtmps://dc4-1.rtmp.t.me/s/`", parse_mode="Markdown")
+    await update.effective_chat.send_message("RTMP Base URL:")
     return RTMP_BASE
 
 async def get_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     await update.message.delete()
     context.user_data["selected_input"] = url
-    await update.effective_chat.send_message("RTMP Base:\n`rtmps://dc4-1.rtmp.t.me/s/`", parse_mode="Markdown")
+    await update.effective_chat.send_message("RTMP Base URL:")
     return RTMP_BASE
 
-# === RTMP / KEY / TITLE ===
 async def get_rtmp_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base = update.message.text.strip()
     await update.message.delete()
@@ -147,17 +136,14 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["final_rtmp"] = rtmp
 
     await update.effective_chat.send_message(
-        f"{EMOJI} Ready to go LIVE\n"
-        f"Title: `{title}`\n"
-        f"RTMP: `{rtmp}`",
+        f"Ready:\nTitle: `{title}`\nRTMP: `{rtmp}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("START", callback_data="confirm_start")]
+            [InlineKeyboardButton("Start", callback_data="confirm_start")]
         ])
     )
     return CONFIRM
 
-# === GO LIVE ===
 async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -176,27 +162,16 @@ async def confirm_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream.start()
 
     await query.edit_message_text(
-        f"{EMOJI} LIVE NOW\n"
-        f"Title: `{context.user_data['title']}`\n"
-        f"ID: `{sid}`\n"
-        f"Status: `{LIVE}`",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Stop", callback_data=f"stop_{sid}")]
-        ])
+        f"Started\nTitle: `{context.user_data['title']}`\nID: `{sid}`",
+        parse_mode="Markdown"
     )
     return ConversationHandler.END
 
-# === BUTTONS ===
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-
-    if data.startswith("type_"):
-        return await choose_input_type(update, context)
-    elif data.startswith("stop_"):
-        sid = data[5:]
+    if query.data.startswith("stop_"):
+        sid = query.data[5:]
         stream = manager.get(sid)
         if stream:
             stream.stop()
@@ -205,7 +180,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("Not found.")
 
-# === MAIN ===
 def main():
     ensure_dirs()
     app = Application.builder().token(TOKEN).build()
@@ -233,7 +207,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("TGTV — CLEAN & COOL")
+    print("TGTV — RESTORED & WORKING")
     app.run_polling()
 
 if __name__ == "__main__":
