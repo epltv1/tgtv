@@ -28,7 +28,6 @@ class Stream:
         while self.running:
             cmd = [
                 "ffmpeg", "-y",
-                # INPUT STABILITY
                 "-fflags", "+genpts+discardcorrupt", "-flags", "+low_delay",
                 "-reconnect", "1", "-reconnect_at_eof", "1",
                 "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
@@ -42,26 +41,21 @@ class Stream:
             cmd += [
                 "-re", "-i", self.input_url,
 
-                # === VIDEO: ENCODE, KEEP ORIGINAL RESOLUTION ===
-                "-c:v", "libx264",
-                "-preset", "veryfast", "-tune", "zerolatency",
-                "-profile:v", "high", "-level", "5.2",  # Supports 4K+
+                # ENCODE SMOOTH
+                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                "-profile:v", "high", "-level", "5.2",
                 "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
                 "-r", "30", "-pix_fmt", "yuv420p",
+                "-crf", "18", "-maxrate", "35000k", "-bufsize", "70000k",
 
-                # === QUALITY: CRF (BETTER THAN FIXED BITRATE) ===
-                "-crf", "18",  # 18 = Excellent, 23 = Good, 28 = OK
-                "-maxrate:v", "35000k",  # High cap for 4K/8K
-                "-bufsize:v", "70000k",
-
-                # === AUDIO: HIGH QUALITY ===
+                # AUDIO
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
                 "-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0",
 
-                # === OUTPUT: SMOOTH FLV ===
+                # OUTPUT — FIXED FOR TELEGRAM
                 "-f", "flv",
                 "-flvflags", "+add_keyframe_index",
-                "-rtmp_buffer", "4000", "-rtmp_live", "live",
+                "-rtmp_buffer", "1000", "-rtmp_live", "live",
                 "-thread_queue_size", "2048",
                 self.rtmp
             ]
@@ -69,9 +63,17 @@ class Stream:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
+                bufsize=1,
+                universal_newlines=True
             )
             self.process = proc
+
+            # LOG ERRORS (DEBUG)
+            for line in proc.stderr:
+                if "error" in line.lower() or "failed" in line.lower():
+                    print(f"FFMPEG ERROR [{self.id}]: {line.strip()}")
+
             proc.wait()
 
             if not self.running:
@@ -81,12 +83,12 @@ class Stream:
                 asyncio.create_task(
                     self.bot.send_message(
                         chat_id=self.chat_id,
-                        text=f"*Stream Stopped*\nTitle: `{self.title}`\nID: `{self.id}`",
+                        text=f"Stream Stopped\nTitle: `{self.title}`\nID: `{self.id}`",
                         parse_mode="Markdown"
                     )
                 )
 
-            time.sleep(2)
+            time.sleep(3)
 
     def start(self):
         if self.running: return
